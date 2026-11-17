@@ -81,6 +81,27 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 
 ---
 
+## 🧩 Supported Nodes (v0.1)
+
+| n8n Node | Compiled Native Behavior |
+| :--- | :--- |
+| **Webhook** | Native Fastify route handler (`GET`, `POST`, `PUT`, `DELETE`, `ALL`) |
+| **Respond to Webhook** | `reply.code(status).send(payload)` with JSON/Text support |
+| **Code / Function** | Native async JavaScript execution with `$input`, `$json`, and `$('Node')` bindings |
+| **Execute Workflow** | Direct in-memory function invocation via `WorkflowRegistry` |
+| **IF / Filter** | Deterministic branch tracking (`outputIndex 0` vs `1`) |
+| **Switch** | Multi-branch router matching rules + fallback |
+| **Set / Edit Fields** | Object mutation with dot-notation & `keepOnlySet` |
+| **HTTP Request** | Native `fetch()` with headers, JSON body, and error handling |
+| **Aggregate** | In-memory item aggregation |
+| **Split Out** | Expands nested arrays into individual `N8nItem[]` items |
+| **Merge** | Combines or appends parallel execution branches |
+| **PostgreSQL** | Parameterized SQL execution via `DATABASE_URL` |
+| **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
+| **Wait** | Non-blocking async `setTimeout` promise |
+
+---
+
 ## Code node dependencies
 
 Code nodes can load built-in Node.js modules with `require('node:path')`.
@@ -101,25 +122,6 @@ bun run start
 The compiler adds those entries to the generated `package.json`. List each
 third-party package the workflow can load, including packages selected by
 a dynamic `require()` or `import()`.
-
-## 🧩 Supported Nodes (v0.1)
-
-| n8n Node | Compiled Native Behavior |
-| :--- | :--- |
-| **Webhook** | Native Fastify route handler (`GET`, `POST`, `PUT`, `DELETE`, `ALL`) |
-| **Respond to Webhook** | `reply.code(status).send(payload)` with JSON/Text support |
-| **Code / Function** | Native async JavaScript execution with `$input`, `$json`, and `$('Node')` bindings |
-| **Execute Workflow** | Direct in-memory function invocation via `WorkflowRegistry` |
-| **IF / Filter** | Deterministic branch tracking (`outputIndex 0` vs `1`) |
-| **Switch** | Multi-branch router matching rules + fallback |
-| **Set / Edit Fields** | Object mutation with dot-notation & `keepOnlySet` |
-| **HTTP Request** | Native `fetch()` with headers, JSON body, and error handling |
-| **Aggregate** | In-memory item aggregation |
-| **Split Out** | Expands nested arrays into individual `N8nItem[]` items |
-| **Merge** | Combines or appends parallel execution branches |
-| **PostgreSQL** | Parameterized SQL execution via `DATABASE_URL` |
-| **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
-| **Wait** | Non-blocking async `setTimeout` promise |
 
 ---
 
