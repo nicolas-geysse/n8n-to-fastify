@@ -1,6 +1,8 @@
 import type { ParsedWorkflow } from './core-parser';
+import { getRabbitMqPublisherIssue, rabbitMqPublisherType } from './mappers/rabbitmq';
 
 const supportedNodeTypes = new Set([
+  rabbitMqPublisherType,
   ...[
     'webhook',
     'respondToWebhook',
@@ -51,6 +53,10 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     }
     if (node.onError && node.onError !== 'stopWorkflow') {
       report(node.name, 'the configured onError behavior is ignored');
+    }
+    if (node.type === rabbitMqPublisherType) {
+      const issue = getRabbitMqPublisherIssue(node);
+      if (issue) report(node.name, issue);
     }
 
     const params = node.parameters ?? {};

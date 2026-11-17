@@ -97,6 +97,7 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 | **Split Out** | Expands nested arrays into individual `N8nItem[]` items |
 | **Merge** | Combines or appends parallel execution branches |
 | **PostgreSQL** | Parameterized SQL execution via `DATABASE_URL` |
+| **RabbitMQ** | Publish messages to an existing exchange |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | Non-blocking async `setTimeout` promise |
 
@@ -150,6 +151,21 @@ Invalid JSON and JSON files without a workflow stop compilation.
 
 Passing these checks means none of the known issues were detected. To verify
 behavior, compare the generated service against representative n8n runs.
+
+---
+
+## RabbitMQ publisher
+
+The compiler supports the RabbitMQ **Send Message** operation in **Exchange**
+mode with default options, using node versions 1 and 1.1 from n8n 1.123.5.
+Declare and bind the exchange before starting the service. Set
+`RABBITMQ_URL` to the broker's AMQP or AMQPS connection URL at runtime.
+The generated manifest includes `amqplib` when a workflow uses this node.
+
+The publisher evaluates the exchange and routing key using the first input
+item and publishes one message per item. It waits for broker confirmation.
+The output preserves the n8n `{ success }` shape, where the boolean reflects
+whether the client's write buffer can accept more messages.
 
 ---
 

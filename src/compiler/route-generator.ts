@@ -1,5 +1,6 @@
 import { ParsedWorkflow } from './parser';
 import { CodeGenerator } from './code-generator';
+import { rabbitMqPublisherType } from './mappers/rabbitmq';
 
 export class RouteGenerator {
   /**
@@ -140,7 +141,10 @@ try {
   /**
    * Generates package.json for the compiled standalone microservice.
    */
-  static generateOutputPackageJson(): string {
+  static generateOutputPackageJson(workflows: ParsedWorkflow[] = []): string {
+    const needsRabbitMq = workflows.some((workflow) =>
+      workflow.nodes.some((node) => node.type === rabbitMqPublisherType)
+    );
     return JSON.stringify(
       {
         name: 'compiled-n8n-service',
@@ -153,6 +157,7 @@ try {
         dependencies: {
           '@fastify/cors': '^9.0.1',
           fastify: '^4.28.1',
+          ...(needsRabbitMq ? { amqplib: '^0.10.9' } : {}),
         },
       },
       null,

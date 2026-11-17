@@ -1,5 +1,6 @@
 import { ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
+import { rabbitMqPublisherType } from './mappers/rabbitmq';
 
 export class CodeGenerator {
   static sanitizeIdentifier(str: string): string {
@@ -16,11 +17,14 @@ export class CodeGenerator {
     const functionName = `workflow_${this.sanitizeIdentifier(wf.fileName)}`;
     const depth = (wf.relativePath.match(/\//g) || []).length;
     const runtimePrefix = '../'.repeat(depth + 1) + 'runtime';
+    const rabbitMqImport = wf.nodes.some((node) => node.type === rabbitMqPublisherType)
+      ? `import { publishRabbitMq } from '${runtimePrefix}/rabbitmq';\n`
+      : '';
 
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-
+${rabbitMqImport}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),
