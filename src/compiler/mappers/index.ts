@@ -123,7 +123,6 @@ export class NodeMappers {
     // [Node: ${ctx.node.name}] Code Execution
     ${ctx.variableName} = await (async () => {
       const currentItems = ${prevVar} || inputItems;
-      const $env = process.env;
       const result = await (async () => {
         ${transformedCode}
       })();

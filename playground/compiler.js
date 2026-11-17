@@ -13,7 +13,6 @@
     // [Node: ${e.node.name}] Code Execution
     ${e.variableName} = await (async () => {
       const currentItems = ${r} || inputItems;
-      const $env = process.env;
       const result = await (async () => {
         ${a}
       })();
@@ -198,6 +197,7 @@ export async function ${t}(
   parentCtx?: WorkflowContext
 ): Promise<{ items: N8nItem[]; context: WorkflowContext }> {
   const ctx = parentCtx || new WorkflowContext();
+  const $env = process.env;
 ${o}
 ${s}
   const finalItems = ${d};
