@@ -16,6 +16,12 @@ test('strict compile reports known incompatibilities before writing output', () 
         { name: 'Trigger', type: 'n8n-nodes-base.rabbitmqTrigger', parameters: {} },
         { name: 'Note', type: 'n8n-nodes-base.stickyNote', parameters: {} },
         {
+          name: 'Legacy Code',
+          type: 'n8n-nodes-base.code',
+          continueOnFail: true,
+          parameters: { jsCode: 'throw new Error("fixture error");' },
+        },
+        {
           name: 'Request',
           type: 'n8n-nodes-base.httpRequest',
           onError: 'continueRegularOutput',
@@ -42,6 +48,7 @@ test('strict compile reports known incompatibilities before writing output', () 
     expect(diagnostics).toContain('only JSON request bodies are supported');
     expect(diagnostics).toContain('JSON header configuration is ignored');
     expect(diagnostics).toContain('the configured onError behavior is ignored');
+    expect(diagnostics).toContain('node "Legacy Code": legacy continueOnFail is ignored');
     expect(diagnostics).toContain('raw JSON mode is ignored');
     expect(diagnostics).toContain('combine mode reads at most two inputs');
     expect(diagnostics).not.toContain('node "Note"');

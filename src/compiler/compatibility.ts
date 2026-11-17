@@ -46,6 +46,9 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
       continue;
     }
     if (node.disabled) report(node.name, 'disabled nodes can still be executed');
+    if (node.continueOnFail) {
+      report(node.name, 'legacy continueOnFail is ignored');
+    }
     if (node.onError && node.onError !== 'stopWorkflow') {
       report(node.name, 'the configured onError behavior is ignored');
     }
