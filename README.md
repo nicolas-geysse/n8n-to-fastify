@@ -145,7 +145,8 @@ In strict mode, the CLI reports known unsupported features by workflow and
 node and stops before writing output. Checks include unsupported nodes,
 non-main connections, disabled nodes, unsupported error handling, selected
 HTTP Request and Edit Fields options, and Combine mode with more than two
-inputs. A parse error also stops a directory compilation.
+inputs. In strict mode, put only workflow exports in the input directory.
+Invalid JSON and JSON files without a workflow stop compilation.
 
 Passing these checks means none of the known issues were detected. To verify
 behavior, compare the generated service against representative n8n runs.

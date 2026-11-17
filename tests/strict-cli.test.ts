@@ -55,11 +55,16 @@ test('strict compile reports known incompatibilities before writing output', () 
   }
 });
 
-test('strict directory compile fails if a workflow cannot be parsed', () => {
+test.each([
+  ['invalid JSON', '{'],
+  ['a JSON file without a workflow', '{}'],
+])('strict directory compile fails on %s', (_description, contents) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'n2f-strict-dir-'));
   try {
     fs.copyFileSync('examples/01-lead-intake.json', path.join(dir, 'valid.json'));
-    fs.writeFileSync(path.join(dir, 'broken.json'), '{');
+    const nested = path.join(dir, 'nested');
+    fs.mkdirSync(nested);
+    fs.writeFileSync(path.join(nested, 'broken.json'), contents);
     const output = path.join(dir, 'service');
     const result = Bun.spawnSync([process.execPath, cli, 'compile', dir, '--out', output, '--strict']);
     expect(result.exitCode).toBe(1);

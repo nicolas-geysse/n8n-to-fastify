@@ -49,10 +49,13 @@ export class WorkflowParser extends CoreWorkflowParser {
           );
           if (parsed) {
             results.push(parsed);
+          } else if (options.failOnParseError) {
+            throw new Error('Expected a workflow with a nodes array.');
           }
-        } catch (err: any) {
-          const message = `[n8n-to-fastify] Failed to parse '${fullPath}': ${err.message}`;
-          if (options.failOnParseError) throw new Error(message, { cause: err });
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          const message = `[n8n-to-fastify] Failed to parse '${fullPath}': ${reason}`;
+          if (options.failOnParseError) throw new Error(message, { cause: error });
           console.error(message);
         }
       }
