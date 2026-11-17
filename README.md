@@ -81,6 +81,27 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 
 ---
 
+## Code node dependencies
+
+Code nodes can load built-in Node.js modules with `require('node:path')`.
+For third-party packages, supply a JSON file that maps package names to
+versions. For example, save this as `workflow-dependencies.json`.
+
+```json
+{ "@supabase/supabase-js": "^2.0.0" }
+```
+
+```bash
+bun run compile ./workflows --out ./compiled-service --dependencies ./workflow-dependencies.json
+cd compiled-service
+bun install
+bun run start
+```
+
+The compiler adds those entries to the generated `package.json`. List each
+third-party package the workflow can load, including packages selected by
+a dynamic `require()` or `import()`.
+
 ## 🧩 Supported Nodes (v0.1)
 
 | n8n Node | Compiled Native Behavior |

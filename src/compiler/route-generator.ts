@@ -140,7 +140,7 @@ try {
   /**
    * Generates package.json for the compiled standalone microservice.
    */
-  static generateOutputPackageJson(): string {
+  static generateOutputPackageJson(dependencies: Record<string, string> = {}): string {
     return JSON.stringify(
       {
         name: 'compiled-n8n-service',
@@ -153,6 +153,7 @@ try {
         dependencies: {
           '@fastify/cors': '^9.0.1',
           fastify: '^4.28.1',
+          ...dependencies,
         },
       },
       null,
