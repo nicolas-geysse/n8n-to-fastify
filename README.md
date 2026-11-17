@@ -81,6 +81,12 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 
 ---
 
+## Runtime environment
+
+Put a `.env` file in the generated service directory and run `bun run start`
+from that directory. Bun loads the file at runtime. Use `$env.API_KEY` in
+expressions or Code nodes. Keep the `.env` file out of version control.
+
 ## 🧩 Supported Nodes (v0.1)
 
 | n8n Node | Compiled Native Behavior |
