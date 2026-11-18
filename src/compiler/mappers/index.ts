@@ -438,6 +438,7 @@ ${legacyBinding}${execution}
     const urlExpr = ExpressionParser.parse(params.url || '');
     const multipart = usesMultipartBody(params);
     const jsonHeaders = usesJsonHeaders(params);
+    const neverError = ExpressionParser.parse(params.options?.response?.response?.neverError ?? false);
 
     let headersObj = '{}';
     if (jsonHeaders) {
@@ -483,7 +484,7 @@ ${legacyBinding}${execution}
       const targetUrl = ${urlExpr};
       ${headersSnippet}
       const reqBody = ${bodySnippet};
-      const res = await fetch(targetUrl, {
+      const res = await fetchWithStatus(targetUrl, Boolean(${neverError}), {
         method: ${JSON.stringify(method)},
         headers: reqHeaders,
         ...(reqBody !== undefined ? { body: reqBody } : {})
