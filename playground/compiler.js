@@ -659,6 +659,36 @@
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
   }
 
+  // src/compiler/mappers/stop-and-error.ts
+  var stopAndErrorType = "n8n-nodes-base.stopAndError";
+  function getStopAndErrorIssue(node) {
+    if ((node.typeVersion ?? 1) !== 1)
+      return "Stop and Error supports node version 1";
+    const type = node.parameters?.errorType ?? "errorMessage";
+    if (type !== "errorMessage" && type !== "errorObject") {
+      return "Stop and Error supports Error Message and Error Object";
+    }
+  }
+  function mapStopAndError(ctx) {
+    const issue = getStopAndErrorIssue(ctx.node);
+    if (issue)
+      throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
+    const params = ctx.node.parameters ?? {};
+    const type = params.errorType ?? "errorMessage";
+    const configured = params[type] ?? "";
+    const value = ExpressionParser.parse(typeof configured === "string" && !configured.includes("{{") ? configured.replace(/^=/, "") : configured);
+    const input = ctx.previousVariableName ?? "inputItems";
+    return `
+    {
+      const source: N8nItem[] = ${input} || inputItems;
+      if (source.length > 0) {
+        const inputItems = source;
+        const item = inputItems[0];
+        throw createWorkflowStopError(${JSON.stringify(type)}, ${value});
+      }
+    }`;
+  }
+
   // src/compiler/mappers/http-request.ts
   function usesMultipartBody(params) {
     return params?.sendBody === true && params.contentType === "multipart-form-data";
@@ -701,6 +731,8 @@
   class NodeMappers {
     static mapNode(ctx) {
       const type = ctx.node.type;
+      if (type === stopAndErrorType)
+        return mapStopAndError(ctx);
       if (type === rabbitMqPublisherType) {
         return mapRabbitMqPublisher(ctx);
       }
@@ -1294,10 +1326,12 @@ ${legacyBinding}${execution}
 ` : "";
       const waitImport = wf.nodes.some((node) => node.type === waitNodeType) ? `import { waitForInterval } from '${runtimePrefix}/wait-interval';
 ` : "";
+      const stopAndErrorImport = wf.nodes.some((node) => node.type === stopAndErrorType) ? `import { createWorkflowStopError } from '${runtimePrefix}/stop-and-error';
+` : "";
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}
+${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({
@@ -1375,7 +1409,7 @@ ${nodeCode.trim()}
         }
         bodyCode += this.generateNodeBlock(wf.id, node, branchCheckStr, nodeCode, ancestorTriggers.length > 0 ? "      " : "    ");
       });
-      const lastNodeName = wf.orderedNodes.filter((node) => disabledModes.get(node) !== "skip").at(-1)?.name;
+      const lastNodeName = wf.orderedNodes.filter((node) => disabledModes.get(node) !== "skip" && (node.type !== stopAndErrorType || node.disabled)).at(-1)?.name;
       const returnItemsExpr = lastNodeName ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])` : `inputItems`;
       const keys = Array.from(new Set([wf.id, wf.name, wf.fileName])).filter(Boolean);
       return `${imports}

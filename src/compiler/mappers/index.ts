@@ -9,6 +9,7 @@ import { mapS3Download, s3NodeType } from './s3';
 import { compressionNodeType, mapCompression } from './compression';
 import { convertToFileType, mapConvertToFile } from './convert-to-file';
 import { mapWaitInterval, waitNodeType } from './wait-interval';
+import { mapStopAndError, stopAndErrorType } from './stop-and-error';
 import { generateMultipartBody, getMultipartIssue, usesJsonHeaders, usesMultipartBody } from './http-request';
 
 export interface NodeMapperContext {
@@ -25,6 +26,8 @@ export interface NodeMapperContext {
 export class NodeMappers {
   static mapNode(ctx: NodeMapperContext): string {
     const type = ctx.node.type;
+    if (type === stopAndErrorType) return mapStopAndError(ctx);
+
     if (type === rabbitMqPublisherType) {
       return mapRabbitMqPublisher(ctx);
     }

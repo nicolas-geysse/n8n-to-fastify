@@ -8,6 +8,7 @@ import { rabbitMqPublisherType } from './mappers/rabbitmq';
 import { s3NodeType } from './mappers/s3';
 import { compressionNodeType } from './mappers/compression';
 import { convertToFileType } from './mappers/convert-to-file';
+import { stopAndErrorType } from './mappers/stop-and-error';
 import { waitNodeType } from './mappers/wait-interval';
 import { usesJsonHeaders, usesMultipartBody } from './mappers/http-request';
 import { rabbitMqTriggerType } from './rabbitmq-trigger';
@@ -61,11 +62,14 @@ export class CodeGenerator {
     const waitImport = wf.nodes.some(node => node.type === waitNodeType)
       ? `import { waitForInterval } from '${runtimePrefix}/wait-interval';\n`
       : '';
+    const stopAndErrorImport = wf.nodes.some(node => node.type === stopAndErrorType)
+      ? `import { createWorkflowStopError } from '${runtimePrefix}/stop-and-error';\n`
+      : '';
 
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}
+${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({
@@ -155,7 +159,9 @@ ${nodeCode.trim()}
         ancestorTriggers.length > 0 ? '      ' : '    ');
     });
 
-    const lastNodeName = wf.orderedNodes.filter(node => disabledModes.get(node) !== 'skip').at(-1)?.name;
+    const lastNodeName = wf.orderedNodes
+      .filter(node => disabledModes.get(node) !== 'skip' && (node.type !== stopAndErrorType || node.disabled))
+      .at(-1)?.name;
     const returnItemsExpr = lastNodeName
       ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])`
       : `inputItems`;

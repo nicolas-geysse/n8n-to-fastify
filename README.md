@@ -115,6 +115,8 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 | **Compression** | Decompresses inline ZIP and GZIP binary fields with anti-Zip-Bomb & path-traversal limits |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | In-process time intervals with version-specific defaults and runtime expressions |
+| **Stop and Error** | Stops an active workflow path with a message or structured error |
+| **Stop and Error** | Stops an active workflow path with a message or structured error |
 
 > Legacy `$node["Node name"]` references in a `Code` node running once for all items read the first item from the connected output (`.json`, legacy `.data` alias, and `.binary` metadata).
 
