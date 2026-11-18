@@ -228,6 +228,8 @@ With `Send Headers` enabled, `specifyHeaders: 'json'` accepts either a JSON stri
 
 HTTP requests treat non-2xx statuses as errors by default. Enable **Never Error** to process the response body regardless of the status.
 
+**Timeout** sets how long the HTTP node waits for the initial response in milliseconds. It defaults to 300,000 ms. The timer stops when the response headers arrive.
+
 ---
 
 ## 📚 Architecture Guides & Deep Dives

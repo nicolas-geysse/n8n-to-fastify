@@ -1242,6 +1242,7 @@ ${legacyBinding}${execution}
       const prevVar = ctx.previousVariableName || "inputItems";
       const method = (params.method || "GET").toUpperCase();
       const urlExpr = ExpressionParser.parse(params.url || "");
+      const timeout = ExpressionParser.parse(params.options?.timeout ?? 0);
       const multipart = usesMultipartBody(params);
       const jsonHeaders = usesJsonHeaders(params);
       const neverError = ExpressionParser.parse(params.options?.response?.response?.neverError ?? false);
@@ -1297,13 +1298,15 @@ ${legacyBinding}${execution}
     ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (${callbackParameters}) => {
       const item = currentItem;
       const targetUrl = ${urlExpr};
+      const responseTimeout = createResponseTimeout(${timeout});
       ${headersSnippet}
       const reqBody = ${bodySnippet};
       const res = await fetchWithStatus(targetUrl, Boolean(${neverError}), {
         method: ${JSON.stringify(method)},
         headers: reqHeaders,
-        ...(reqBody !== undefined ? { body: reqBody } : {})
-      });
+        ...(reqBody !== undefined ? { body: reqBody } : {}),
+        signal: responseTimeout.start(),
+      }).finally(responseTimeout.clear);
       ${responseSnippet}
     }));
     item = ${ctx.variableName}[0] || { json: {} };
@@ -1546,11 +1549,13 @@ ${legacyBinding}${execution}
 ` : "";
       const httpStatusImport = wf.nodes.some((node) => node.type.includes("httpRequest")) ? `import { fetchWithStatus } from '${runtimePrefix}/http-request';
 ` : "";
+      const httpTimeoutImport = wf.nodes.some((node) => node.type.includes("httpRequest")) ? `import { createResponseTimeout } from '${runtimePrefix}/http-request';
+` : "";
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
 ${httpStatusImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
-${legacyNames}
+${httpTimeoutImport}${legacyNames}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),

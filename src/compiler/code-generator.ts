@@ -72,11 +72,15 @@ export class CodeGenerator {
       ? `import { fetchWithStatus } from '${runtimePrefix}/http-request';\n`
       : '';
 
+    const httpTimeoutImport = wf.nodes.some(node => node.type.includes('httpRequest'))
+      ? `import { createResponseTimeout } from '${runtimePrefix}/http-request';\n`
+      : '';
+
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
 ${httpStatusImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
-${legacyNames}
+${httpTimeoutImport}${legacyNames}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),
