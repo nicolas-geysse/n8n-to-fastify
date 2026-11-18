@@ -5,6 +5,7 @@ import { getLegacyNodeReferenceIssue } from './code-context';
 import { mapS3Download, s3NodeType } from './s3';
 import { generateMultipartBody, getMultipartIssue, usesJsonHeaders, usesMultipartBody } from './http-request';
 import { mapRabbitMqPublisher, rabbitMqPublisherType } from './rabbitmq';
+import { convertToFileType, mapConvertToFile } from './convert-to-file';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -26,6 +27,10 @@ export class NodeMappers {
 
     if (type === s3NodeType) {
       return mapS3Download(ctx);
+    }
+
+    if (type === convertToFileType) {
+      return mapConvertToFile(ctx);
     }
 
     if (type.includes('respondToWebhook')) {

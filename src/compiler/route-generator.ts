@@ -3,6 +3,7 @@ import { CodeGenerator } from './code-generator';
 import { s3NodeType } from './mappers/s3';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
 import { getRabbitMqTriggers, parseRabbitMqTrigger } from './rabbitmq-trigger';
+import { convertToFileType } from './mappers/convert-to-file';
 
 export class RouteGenerator {
   /**
@@ -198,6 +199,8 @@ try {
       getRabbitMqTriggers(workflow).length > 0 ||
       workflow.nodes.some((node) => node.type === rabbitMqPublisherType)
     );
+    const needsMimeTypes = needsS3 ||
+      workflows.some(workflow => workflow.nodes.some(node => node.type === convertToFileType));
     return JSON.stringify(
       {
         name: 'compiled-n8n-service',
@@ -210,7 +213,8 @@ try {
         dependencies: {
           '@fastify/cors': '^9.0.1',
           fastify: '^4.28.1',
-          ...(needsS3 ? { '@aws-sdk/client-s3': '3.808.0', 'mime-types': '^3.0.1' } : {}),
+          ...(needsS3 ? { '@aws-sdk/client-s3': '3.808.0' } : {}),
+          ...(needsMimeTypes ? { 'mime-types': '^3.0.1' } : {}),
           ...(needsRabbitMq ? { amqplib: '^0.10.9' } : {}),
           ...dependencies,
         },

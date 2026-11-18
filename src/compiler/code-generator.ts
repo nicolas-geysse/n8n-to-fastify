@@ -6,6 +6,7 @@ import { s3NodeType } from './mappers/s3';
 import { usesJsonHeaders, usesMultipartBody } from './mappers/http-request';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
 import { rabbitMqTriggerType } from './rabbitmq-trigger';
+import { convertToFileType } from './mappers/convert-to-file';
 
 export class CodeGenerator {
   static sanitizeIdentifier(str: string): string {
@@ -42,11 +43,14 @@ export class CodeGenerator {
     const rabbitMqImport = wf.nodes.some((node) => node.type === rabbitMqPublisherType)
       ? `import { publishRabbitMq } from '${runtimePrefix}/rabbitmq';\n`
       : '';
+    const jsonFileImport = wf.nodes.some(node => node.type === convertToFileType)
+      ? `import { convertItemsToJsonFile } from '${runtimePrefix}/convert-to-json';\n`
+      : '';
 
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}${s3Import}${httpRequestImport}${rabbitMqImport}
+${positionMergeImport}${legacyImport}${s3Import}${httpRequestImport}${rabbitMqImport}${jsonFileImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({
