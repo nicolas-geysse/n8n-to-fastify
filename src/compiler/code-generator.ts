@@ -10,7 +10,9 @@ import { convertToFileType } from './mappers/convert-to-file';
 import { isRawEditFields, usesRawLegacyNodeReferences } from './mappers/raw-edit-fields';
 import { compressionNodeType } from './mappers/compression';
 import { getDisabledNodeMode } from './disabled-node';
+import { emitPollingLoop } from './polling-code';
 import { waitNodeType } from './mappers/wait-interval';
+import { stopAndErrorType } from './mappers/stop-and-error';
 
 export class CodeGenerator {
   static sanitizeIdentifier(str: string): string {
@@ -61,11 +63,14 @@ export class CodeGenerator {
     const waitImport = wf.nodes.some(node => node.type === waitNodeType)
       ? `import { waitForInterval } from '${runtimePrefix}/wait-interval';\n`
       : '';
+    const stopAndErrorImport = wf.nodes.some(node => node.type === stopAndErrorType)
+      ? `import { createWorkflowStopError } from '${runtimePrefix}/stop-and-error';\n`
+      : '';
 
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}${s3Import}${httpRequestImport}${rabbitMqImport}${jsonFileImport}${rawFieldsImport}${compressionImport}${waitImport}
+${positionMergeImport}${legacyImport}${s3Import}${httpRequestImport}${rabbitMqImport}${jsonFileImport}${rawFieldsImport}${compressionImport}${waitImport}${stopAndErrorImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({
@@ -88,6 +93,16 @@ const DateTime = {
     const hasRabbitMqTrigger = triggers.some(node => node.type === rabbitMqTriggerType);
     const disabledModes = new Map(wf.orderedNodes.map(node => [node, getDisabledNodeMode(node, wf)]));
     const nonTriggers = wf.orderedNodes.filter(node => !triggers.includes(node) && disabledModes.get(node) !== 'skip');
+    const loops = wf.pollingLoops ?? [];
+    const loopsByMember = new Map(loops.flatMap(loop => loop.nodes.map(name => [name, loop] as const)));
+    const terminalNames = new Set(loops.flatMap(loop => loop.terminalExits.map(exit => exit.target)));
+    const mapNode = (node: ParsedWorkflow['nodes'][number], previousVariableName: string) => NodeMappers.mapNode({
+      node,
+      workflowName: wf.name,
+      variableName: nodeVarMap.get(node.name)!,
+      previousVariableName,
+      legacyNodePorts: legacyNodes.has(node) ? collectLegacyNodePorts(node, nodesByName) : undefined,
+    });
 
     triggers.forEach((node) => {
       const index = wf.orderedNodes.indexOf(node);
@@ -110,6 +125,18 @@ const DateTime = {
       const varName = nodeVarMap.get(node.name)!;
       declCode += `  let ${varName}: any = inputItems;\n`;
 
+      const loop = loopsByMember.get(node.name);
+      if (loop) {
+        if (node.name === loop.entry) {
+          bodyCode += emitPollingLoop(loop, nodesByName, mapNode, (member, condition, code) =>
+            this.generateNodeBlock(wf.id, member, condition, code,
+              member.ancestorTriggers?.length || hasRabbitMqTrigger ? '      ' : '    ')
+          );
+        }
+        return;
+      }
+      if (terminalNames.has(node.name)) return;
+
       let branchCheckStr = 'true';
       const incoming = node.incomingConnections ?? [];
       const passesInput = disabledModes.get(node) === 'passthrough';
@@ -125,13 +152,7 @@ const DateTime = {
       let nodeCode = passesInput ? `
     ${varName} = incomingItems || [];
     item = ${varName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});` : NodeMappers.mapNode({
-        node,
-        workflowName: wf.name,
-        variableName: varName,
-        previousVariableName: runPerIncomingBatch ? 'incomingItems' : 'inputItems',
-        legacyNodePorts: legacyNodes.has(node) ? collectLegacyNodePorts(node, nodesByName) : undefined,
-      });
+    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});` : mapNode(node, runPerIncomingBatch ? 'incomingItems' : 'inputItems');
       if (runPerIncomingBatch) {
         const batches = incoming.map(
           conn => `ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`
@@ -155,7 +176,8 @@ ${nodeCode.trim()}
         ancestorTriggers.length > 0 || hasRabbitMqTrigger ? '      ' : '    ');
     });
 
-    const lastNodeName = wf.orderedNodes.filter(node => disabledModes.get(node) !== 'skip').at(-1)?.name;
+    const lastNodeName = wf.orderedNodes.filter(node => disabledModes.get(node) !== 'skip' &&
+      (node.type !== stopAndErrorType || node.disabled)).at(-1)?.name;
     const returnItemsExpr = lastNodeName
       ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])`
       : `inputItems`;

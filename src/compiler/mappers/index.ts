@@ -10,6 +10,7 @@ import { getRawEditFieldsIssue, isRawEditFields, mapRawEditFields } from './raw-
 import { continuesCodeOnRegularOutput } from './code-errors';
 import { compressionNodeType, mapCompression } from './compression';
 import { mapWaitInterval, waitNodeType } from './wait-interval';
+import { mapStopAndError, stopAndErrorType } from './stop-and-error';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -40,6 +41,8 @@ export class NodeMappers {
     if (type === compressionNodeType) {
       return mapCompression(ctx);
     }
+
+    if (type === stopAndErrorType) return mapStopAndError(ctx);
 
     if (type.includes('respondToWebhook')) {
       return this.mapRespondToWebhookNode(ctx);

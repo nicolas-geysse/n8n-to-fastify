@@ -11,6 +11,7 @@ import { continuesCodeOnRegularOutput } from './mappers/code-errors';
 import { compressionNodeType, getCompressionIssue } from './mappers/compression';
 import { getDisabledNodeMode } from './disabled-node';
 import { getWaitIntervalIssue, waitNodeType } from './mappers/wait-interval';
+import { getStopAndErrorIssue, stopAndErrorType } from './mappers/stop-and-error';
 
 const supportedNodeTypes = new Set([
   convertToFileType,
@@ -18,6 +19,7 @@ const supportedNodeTypes = new Set([
   s3NodeType,
   rabbitMqPublisherType,
   rabbitMqTriggerType,
+  stopAndErrorType,
   ...[
     'webhook',
     'respondToWebhook',
@@ -99,6 +101,10 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     }
     if (node.type === waitNodeType) {
       const issue = getWaitIntervalIssue(node);
+      if (issue) report(node.name, issue);
+    }
+    if (node.type === stopAndErrorType) {
+      const issue = getStopAndErrorIssue(node);
       if (issue) report(node.name, issue);
     }
     if (node.type === 'n8n-nodes-base.httpRequest') {
