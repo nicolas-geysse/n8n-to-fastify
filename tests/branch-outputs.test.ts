@@ -10,6 +10,7 @@ async function withGeneratedWorkflow(
   typeVersion: number,
   parameters: Record<string, unknown>,
   check: (run: CompiledWorkflowFn) => Promise<void>,
+  graph?: { nodes: object[]; connections: object },
 ) {
   const dir = mkdtempSync(path.join(tmpdir(), 'n2f-branches-'));
   try {
@@ -19,12 +20,12 @@ async function withGeneratedWorkflow(
     writeFileSync(input, JSON.stringify({
       nodes: [
         { name: 'Decision', type: `n8n-nodes-base.${type}`, typeVersion, parameters },
-        ...sinks.map(name => ({
+        ...(graph?.nodes ?? sinks.map(name => ({
           name, type: 'n8n-nodes-base.code', typeVersion: 2,
           parameters: { jsCode: 'return $input.all();' },
-        })),
+        }))),
       ],
-      connections: { Decision: { main: sinks.map(node => [{ node, type: 'main', index: 0 }]) } },
+      connections: graph?.connections ?? { Decision: { main: sinks.map(node => [{ node, type: 'main', index: 0 }]) } },
     }));
     const compiled = Bun.spawnSync([process.execPath, path.resolve('bin/cli.ts'), 'compile', input, '--out', output]);
     expect(compiled.exitCode).toBe(0);
@@ -97,5 +98,59 @@ test('Switch 3.3 evaluates an output index expression separately for each item',
     expect(ids(context.getNode('Output 0').all())).toEqual(['second']);
     expect(context.hasExecutedNode('Output 1')).toBe(false);
     await expect(run([{ json: { port: 3 } }])).rejects.toThrow('invalid output index');
+  });
+});
+
+test('reconverging paths run separately and forward both batches to the next node', async () => {
+  const target = (name: string) => [{ node: name, type: 'main', index: 0 }];
+  const conditions = { conditions: [
+    { leftValue: '={{ $json.ready }}', operator: { type: 'boolean', operation: 'true' } },
+  ] };
+  const graph = {
+    nodes: [{
+      name: 'Join', type: 'n8n-nodes-base.code', parameters: {
+        jsCode: 'return [{ json: { ids: $input.all().map(item => item.json.id) } }];',
+      },
+    }, {
+      name: 'Tail', type: 'n8n-nodes-base.code', parameters: {
+        jsCode: 'return [{ json: { ids: $input.all().flatMap(item => item.json.ids) } }];',
+      },
+    }],
+    connections: {
+      Decision: { main: [target('Join'), target('Join')] },
+      Join: { main: [target('Tail')] },
+    },
+  };
+  await withGeneratedWorkflow('if', 2.2, { conditions }, async run => {
+    const { items } = await run([
+      { json: { id: 'first', ready: true } },
+      { json: { id: 'second', ready: false } },
+      { json: { id: 'third', ready: true } },
+    ]);
+    expect(items.map(item => item.json.ids)).toEqual([['first', 'third'], ['second']]);
+  }, graph);
+});
+
+test.each(['if', 'switch'] as const)('%s keeps $input.first() separate from the item being routed', async type => {
+  const conditions = { conditions: [
+    { leftValue: '={{ $input.first().json.ready }}', operator: { type: 'boolean', operation: 'true' } },
+  ] };
+  const parameters = type === 'if' ? { conditions } : {
+    rules: { values: [{ conditions }] }, options: { fallbackOutput: 'extra' },
+  };
+  await withGeneratedWorkflow(type, type === 'if' ? 2.2 : 3.2, parameters, async run => {
+    const { context } = await run([
+      { json: { id: 'first', ready: true } }, { json: { id: 'second', ready: false } },
+    ]);
+    expect(ids(context.getNode('Output 0').all())).toEqual(['first', 'second']);
+    expect(context.hasExecutedNode('Output 1')).toBe(false);
+  });
+});
+
+test('Switch retains output zero as the extra fallback with no rules', async () => {
+  const parameters = { rules: { values: [] }, options: { fallbackOutput: 'extra' } };
+  await withGeneratedWorkflow('switch', 3.2, parameters, async run => {
+    const { context } = await run([{ json: { id: 'fallback' } }]);
+    expect(ids(context.getNode('Output 0').all())).toEqual(['fallback']);
   });
 });
