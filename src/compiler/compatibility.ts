@@ -7,6 +7,7 @@ import { getRabbitMqPublisherIssue, rabbitMqPublisherType } from './mappers/rabb
 import { parseRabbitMqTrigger, rabbitMqTriggerType } from './rabbitmq-trigger';
 import { convertToFileType, getConvertToFileIssue } from './mappers/convert-to-file';
 import { getRawEditFieldsIssue } from './mappers/raw-edit-fields';
+import { continuesCodeOnRegularOutput } from './mappers/code-errors';
 
 const supportedNodeTypes = new Set([
   convertToFileType,
@@ -62,7 +63,7 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     if (node.continueOnFail) {
       report(node.name, 'legacy continueOnFail is ignored');
     }
-    if (node.onError && node.onError !== 'stopWorkflow') {
+    if (node.onError && node.onError !== 'stopWorkflow' && !continuesCodeOnRegularOutput(node)) {
       report(node.name, 'the configured onError behavior is ignored');
     }
     if (node.type === rabbitMqPublisherType) {
