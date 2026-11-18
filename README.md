@@ -108,6 +108,7 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 | **PostgreSQL** | Parameterized SQL execution via `DATABASE_URL` |
 | **RabbitMQ** | Publish messages to an existing exchange (`RABBITMQ_URL`) |
 | **RabbitMQ Trigger** | Consume a queue and acknowledge delivery after successful execution |
+| **S3** | Downloads files into binary items from an S3-compatible endpoint |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | Non-blocking async `setTimeout` promise |
 
@@ -196,6 +197,14 @@ The publisher evaluates the exchange and routing key using the first input item,
 The compiler supports RabbitMQ Trigger v1 with `executionFinishesSuccessfully` using the same `RABBITMQ_URL`. The generated service checks (or optionally declares via `assertQueue`) and binds the queue, limits unacknowledged deliveries with `parallelMessages`, and skips disabled triggers.
 
 Each delivery triggers the branch with message fields, properties, and text (or parsed JSON when `jsonParseBody` is enabled), acknowledging after success, requeuing on failure, and draining in-flight executions on `SIGINT`/`SIGTERM`.
+
+---
+
+## 🪣 S3 Downloads
+
+The compiler supports `File / Download` from S3 node v1. Set `S3_ENDPOINT`, `AWS_ACCESS_KEY_ID`, and `AWS_SECRET_ACCESS_KEY` at runtime (optional `AWS_REGION`, defaulting to `us-east-1`, and `AWS_SESSION_TOKEN`). Path-style addressing is enabled by default; set `S3_FORCE_PATH_STYLE=false` for virtual-hosted addressing.
+
+Each object is downloaded in order and stored as base64 under the configured binary property (`data` by default), preserving input JSON and other binary fields. The generated `package.json` includes `@aws-sdk/client-s3` and `mime-types` automatically when a workflow uses this node.
 
 ---
 

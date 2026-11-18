@@ -378,12 +378,49 @@
     }`;
   }
 
+  // src/compiler/mappers/s3.ts
+  var s3NodeType = "n8n-nodes-base.s3";
+  function getS3DownloadIssue(node) {
+    const params = node.parameters ?? {};
+    if ((node.typeVersion ?? 1) !== 1 || (params.resource ?? "file") !== "file" || (params.operation ?? "download") !== "download") {
+      return "S3 supports File / Download on node version 1";
+    }
+    if (typeof params.bucketName !== "string" || !params.bucketName || typeof params.fileKey !== "string" || !params.fileKey) {
+      return "S3 Download requires bucketName and fileKey";
+    }
+  }
+  function mapS3Download(ctx) {
+    const issue = getS3DownloadIssue(ctx.node);
+    if (issue)
+      throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
+    const params = ctx.node.parameters;
+    const source = ctx.previousVariableName ?? "inputItems";
+    const bucket = ExpressionParser.parse(params.bucketName);
+    const key = ExpressionParser.parse(params.fileKey);
+    const binaryProperty = ExpressionParser.parse(params.binaryPropertyName ?? "data");
+    return `
+    {
+      const downloads = (${source} || inputItems).map((item: N8nItem) => ({
+        item,
+        bucket: String(${bucket} ?? ''),
+        key: String(${key} ?? ''),
+        binaryProperty: String(${binaryProperty} ?? ''),
+      }));
+      ${ctx.variableName} = await downloadS3Files(downloads);
+      item = ${ctx.variableName}[0] || { json: {} };
+      ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});
+    }`;
+  }
+
   // src/compiler/mappers/index.ts
   class NodeMappers {
     static mapNode(ctx) {
       const type = ctx.node.type;
       if (type === rabbitMqPublisherType) {
         return mapRabbitMqPublisher(ctx);
+      }
+      if (type === s3NodeType) {
+        return mapS3Download(ctx);
       }
       if (type.includes("respondToWebhook")) {
         return this.mapRespondToWebhookNode(ctx);
@@ -894,10 +931,12 @@
 ` : "";
       const rabbitMqImport = wf.nodes.some((node) => node.type === rabbitMqPublisherType) ? `import { publishRabbitMq } from '${runtimePrefix}/rabbitmq';
 ` : "";
+      const s3Import = wf.nodes.some((node) => node.type === s3NodeType) ? `import { downloadS3Files } from '${runtimePrefix}/s3';
+` : "";
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${rabbitMqImport}
+${positionMergeImport}${rabbitMqImport}${s3Import}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),
@@ -1175,6 +1214,7 @@ try {
     }
     static generateOutputPackageJson(workflows = [], dependencies = {}) {
       const needsRabbitMq = workflows.some((workflow) => getRabbitMqTriggers(workflow).length > 0 || workflow.nodes.some((node) => node.type === rabbitMqPublisherType));
+      const needsS3 = workflows.some((workflow) => workflow.nodes.some((node) => node.type === s3NodeType));
       return JSON.stringify({
         name: "compiled-n8n-service",
         version: "1.0.0",
@@ -1187,6 +1227,7 @@ try {
           "@fastify/cors": "^9.0.1",
           fastify: "^4.28.1",
           ...needsRabbitMq ? { amqplib: "^0.10.9" } : {},
+          ...needsS3 ? { "@aws-sdk/client-s3": "3.808.0", "mime-types": "^3.0.1" } : {},
           ...dependencies
         }
       }, null, 2);

@@ -2,6 +2,7 @@ import { N8nNode, ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
 import { isPositionMerge } from './mappers/position-merge';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
+import { s3NodeType } from './mappers/s3';
 import { rabbitMqTriggerType } from './rabbitmq-trigger';
 
 export class CodeGenerator {
@@ -25,11 +26,14 @@ export class CodeGenerator {
     const rabbitMqImport = wf.nodes.some((node) => node.type === rabbitMqPublisherType)
       ? `import { publishRabbitMq } from '${runtimePrefix}/rabbitmq';\n`
       : '';
+    const s3Import = wf.nodes.some(node => node.type === s3NodeType)
+      ? `import { downloadS3Files } from '${runtimePrefix}/s3';\n`
+      : '';
 
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${rabbitMqImport}
+${positionMergeImport}${rabbitMqImport}${s3Import}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),

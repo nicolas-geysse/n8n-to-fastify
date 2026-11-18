@@ -1,6 +1,7 @@
 import { ParsedWorkflow } from './parser';
 import { CodeGenerator } from './code-generator';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
+import { s3NodeType } from './mappers/s3';
 import { getRabbitMqTriggers, parseRabbitMqTrigger } from './rabbitmq-trigger';
 
 export class RouteGenerator {
@@ -196,6 +197,7 @@ try {
       getRabbitMqTriggers(workflow).length > 0 ||
       workflow.nodes.some((node) => node.type === rabbitMqPublisherType)
     );
+    const needsS3 = workflows.some(workflow => workflow.nodes.some(node => node.type === s3NodeType));
     return JSON.stringify(
       {
         name: 'compiled-n8n-service',
@@ -209,6 +211,7 @@ try {
           '@fastify/cors': '^9.0.1',
           fastify: '^4.28.1',
           ...(needsRabbitMq ? { amqplib: '^0.10.9' } : {}),
+          ...(needsS3 ? { '@aws-sdk/client-s3': '3.808.0', 'mime-types': '^3.0.1' } : {}),
           ...dependencies,
         },
       },
