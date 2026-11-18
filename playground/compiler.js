@@ -1180,6 +1180,41 @@ ${legacyBinding}${execution}
     }
   }
 
+  // src/compiler/disabled-node.ts
+  function getDisabledNodeMode(node, workflow) {
+    if (!node.disabled || workflow.triggers.includes(node) || node.type.toLowerCase().endsWith("trigger"))
+      return;
+    const outputs = Object.entries(workflow.connections[node.name] ?? {});
+    let hasOutgoing = false;
+    for (const [type, ports] of outputs) {
+      for (const [port, targets] of ports.entries()) {
+        if (!targets?.length)
+          continue;
+        if (type !== "main" || port !== 0)
+          return;
+        hasOutgoing = true;
+      }
+    }
+    let hasIncoming = false;
+    for (const outputs2 of Object.values(workflow.connections)) {
+      for (const [type, ports] of Object.entries(outputs2)) {
+        for (const targets of ports) {
+          for (const target of targets ?? []) {
+            if (target?.node !== node.name)
+              continue;
+            if (hasIncoming || type !== "main" || (target.index ?? 0) !== 0)
+              return;
+            hasIncoming = true;
+          }
+        }
+      }
+    }
+    if (hasIncoming)
+      return "passthrough";
+    if (!hasOutgoing)
+      return "skip";
+  }
+
   // src/compiler/code-generator.ts
   class CodeGenerator {
     static sanitizeIdentifier(str) {
@@ -1232,7 +1267,8 @@ const DateTime = {
       });
       const triggers = wf.triggers;
       const hasRabbitMqTrigger = triggers.some((node) => node.type === rabbitMqTriggerType);
-      const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n));
+      const disabledModes = new Map(wf.orderedNodes.map((node) => [node, getDisabledNodeMode(node, wf)]));
+      const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n) && disabledModes.get(n) !== "skip");
       triggers.forEach((node) => {
         const index = wf.orderedNodes.indexOf(node);
         const varName = nodeVarMap.get(node.name);
@@ -1263,11 +1299,15 @@ ctx.setNodeOutput(${nodeName}, inputItems);`;
           const branchChecks = incoming.map((conn) => `ctx.isBranchActive(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`);
           branchCheckStr = `(${branchChecks.join(" || ")})`;
         }
-        let nodeCode = NodeMappers.mapNode({
+        const prevExpr = runPerIncomingBatch ? "incomingItems" : "inputItems";
+        let nodeCode = disabledModes.get(node) === "passthrough" ? `
+    ${varName} = ${prevExpr} || [];
+    item = ${varName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});` : NodeMappers.mapNode({
           node,
           workflowName: wf.name,
           variableName: varName,
-          previousVariableName: runPerIncomingBatch ? "incomingItems" : "inputItems",
+          previousVariableName: prevExpr,
           legacyNodePorts: legacyNodes.has(node) ? collectLegacyNodePorts(node, nodesByName) : undefined
         });
         if (runPerIncomingBatch) {
@@ -1285,7 +1325,7 @@ ${nodeCode.trim()}
         }
         bodyCode += this.generateNodeBlock(wf.id, node, branchCheckStr, nodeCode, ancestorTriggers.length > 0 ? "      " : "    ");
       });
-      const lastNodeName = wf.orderedNodes[wf.orderedNodes.length - 1]?.name;
+      const lastNodeName = wf.orderedNodes.filter((node) => disabledModes.get(node) !== "skip").at(-1)?.name;
       const returnItemsExpr = lastNodeName ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])` : `inputItems`;
       const keys = Array.from(new Set([wf.id, wf.name, wf.fileName])).filter(Boolean);
       return `${imports}

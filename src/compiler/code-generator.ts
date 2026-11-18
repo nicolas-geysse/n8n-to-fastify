@@ -1,5 +1,6 @@
 import { N8nNode, ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
+import { getDisabledNodeMode } from './disabled-node';
 import { isPositionMerge } from './mappers/position-merge';
 import { collectLegacyNodePorts, usesLegacyNodeReferences } from './mappers/code-context';
 import { isRawEditFields, usesRawLegacyNodeReferences } from './mappers/raw-edit-fields';
@@ -81,7 +82,8 @@ const DateTime = {
 
     const triggers = wf.triggers;
     const hasRabbitMqTrigger = triggers.some(node => node.type === rabbitMqTriggerType);
-    const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n));
+    const disabledModes = new Map(wf.orderedNodes.map(node => [node, getDisabledNodeMode(node, wf)]));
+    const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n) && disabledModes.get(n) !== 'skip');
 
     triggers.forEach((node) => {
       const index = wf.orderedNodes.indexOf(node);
@@ -115,11 +117,15 @@ const DateTime = {
         branchCheckStr = `(${branchChecks.join(' || ')})`;
       }
 
-      let nodeCode = NodeMappers.mapNode({
+      const prevExpr = runPerIncomingBatch ? 'incomingItems' : 'inputItems';
+      let nodeCode = disabledModes.get(node) === 'passthrough' ? `
+    ${varName} = ${prevExpr} || [];
+    item = ${varName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});` : NodeMappers.mapNode({
         node,
         workflowName: wf.name,
         variableName: varName,
-        previousVariableName: runPerIncomingBatch ? 'incomingItems' : 'inputItems',
+        previousVariableName: prevExpr,
         legacyNodePorts: legacyNodes.has(node) ? collectLegacyNodePorts(node, nodesByName) : undefined,
       });
       if (runPerIncomingBatch) {
@@ -145,7 +151,7 @@ ${nodeCode.trim()}
         ancestorTriggers.length > 0 ? '      ' : '    ');
     });
 
-    const lastNodeName = wf.orderedNodes[wf.orderedNodes.length - 1]?.name;
+    const lastNodeName = wf.orderedNodes.filter(node => disabledModes.get(node) !== 'skip').at(-1)?.name;
     const returnItemsExpr = lastNodeName
       ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])`
       : `inputItems`;

@@ -1,4 +1,5 @@
 import type { ParsedWorkflow } from './core-parser';
+import { getDisabledNodeMode } from './disabled-node';
 import { getPositionMergeIssue, isPositionMerge } from './mappers/position-merge';
 import { getLegacyNodeReferenceIssue } from './mappers/code-context';
 import { continuesCodeOnRegularOutput } from './mappers/code-errors';
@@ -57,11 +58,14 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
   for (const node of workflow.nodes) {
     if (node.type === 'n8n-nodes-base.stickyNote') continue;
     if (node.type === rabbitMqTriggerType && node.disabled) continue;
+    if (node.disabled) {
+      if (!getDisabledNodeMode(node, workflow)) report(node.name, 'disabled node configuration is unsupported');
+      continue;
+    }
     if (!supportedNodeTypes.has(node.type)) {
       report(node.name, `unsupported node type ${JSON.stringify(node.type)}`);
       continue;
     }
-    if (node.disabled) report(node.name, 'disabled nodes can still be executed');
     if (node.continueOnFail) {
       report(node.name, 'legacy continueOnFail is ignored');
     }
