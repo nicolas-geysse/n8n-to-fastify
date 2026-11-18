@@ -102,6 +102,12 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 | **Wait** | In-process time intervals with version-specific defaults and runtime expressions |
 | **Stop and Error** | Stops an active workflow path with a message or structured error |
 
+Compiled polling loops support a single-entry cycle with one timed Wait and
+one IF or Switch retry port. Completed batches continue after the cycle,
+and direct Stop and Error exits fail immediately. Set
+`N8N_TO_FASTIFY_POLL_MAX_ATTEMPTS` at runtime to change the default of 100
+attempts per incoming batch.
+
 ---
 
 ## 🧪 Tests & Reproducible Benchmark

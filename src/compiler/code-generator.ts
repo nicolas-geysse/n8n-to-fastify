@@ -1,5 +1,6 @@
 import { ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
+import { emitPollingLoop } from './polling-code';
 import { waitNodeType } from './mappers/wait-interval';
 import { stopAndErrorType } from './mappers/stop-and-error';
 
@@ -52,6 +53,16 @@ const DateTime = {
       (n) => n.type.includes('webhook') || n.type.includes('trigger') || n.type.includes('cron')
     );
     const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n));
+    const loops = wf.pollingLoops ?? [];
+    const loopsByMember = new Map(loops.flatMap(loop => loop.nodes.map(name => [name, loop] as const)));
+    const terminalNames = new Set(loops.flatMap(loop => loop.terminalExits.map(exit => exit.target)));
+    const nodesByName = new Map(wf.nodes.map(node => [node.name, node]));
+    const mapNode = (node: ParsedWorkflow['nodes'][number], previousVariableName: string) => NodeMappers.mapNode({
+      node,
+      workflowName: wf.name,
+      variableName: nodeVarMap.get(node.name)!,
+      previousVariableName,
+    });
 
     triggers.forEach((node) => {
       const index = wf.orderedNodes.indexOf(node);
@@ -71,6 +82,17 @@ const DateTime = {
       const varName = nodeVarMap.get(node.name)!;
       declCode += `  let ${varName}: any = inputItems;\n`;
 
+      const loop = loopsByMember.get(node.name);
+      if (loop) {
+        if (node.name === loop.entry) {
+          bodyCode += emitPollingLoop(loop, nodesByName, mapNode, (_member, condition, code) =>
+            this.generateConditionalBlock(condition, code)
+          );
+        }
+        return;
+      }
+      if (terminalNames.has(node.name)) return;
+
       let branchCheckStr = 'true';
       const incoming = node.incomingConnections ?? [];
       const runPerIncomingBatch = incoming.length > 0 && !node.type.includes('merge');
@@ -82,12 +104,7 @@ const DateTime = {
         branchCheckStr = `(${branchChecks.join(' || ')})`;
       }
 
-      let nodeCode = NodeMappers.mapNode({
-        node,
-        workflowName: wf.name,
-        variableName: varName,
-        previousVariableName: runPerIncomingBatch ? 'incomingItems' : 'inputItems',
-      });
+      let nodeCode = mapNode(node, runPerIncomingBatch ? 'incomingItems' : 'inputItems');
       if (runPerIncomingBatch) {
         const batches = incoming.map(
           conn => `ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`
@@ -98,7 +115,7 @@ ${nodeCode.trim()}
 });`;
       }
 
-      const finalExecutionBlock = `  if (${branchCheckStr}) {\n    ${nodeCode.trim().replace(/\n/g, '\n    ')}\n  }\n`;
+      const finalExecutionBlock = this.generateConditionalBlock(branchCheckStr, nodeCode);
 
       if (node.ancestorTriggers && node.ancestorTriggers.length > 0) {
         const triggerConditions = node.ancestorTriggers
@@ -133,5 +150,9 @@ ${bodyCode}
 
 registerWorkflow(${JSON.stringify(keys)}, ${functionName});
 `;
+  }
+
+  private static generateConditionalBlock(condition: string, code: string): string {
+    return `  if (${condition}) {\n    ${code.trim().replace(/\n/g, '\n    ')}\n  }\n`;
   }
 }

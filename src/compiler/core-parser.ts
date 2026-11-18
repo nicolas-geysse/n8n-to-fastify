@@ -1,3 +1,5 @@
+import { findPollingLoops, projectPollingSchedule, type PollingLoop } from './polling-loops';
+
 export interface N8nNode {
   id: string;
   name: string;
@@ -28,6 +30,7 @@ export interface ParsedWorkflow {
   connections: Record<string, any>;
   orderedNodes: N8nNode[];
   triggers: N8nNode[];
+  pollingLoops?: PollingLoop[];
 }
 
 /**
@@ -95,7 +98,13 @@ export class CoreWorkflowParser {
       node.ancestorTriggers = Array.from(ancestorTriggers);
     });
 
-    const orderedNodes = this.topologicalSort(nodes, connections);
+    const pollingLoops = findPollingLoops(nodes, connections);
+    const schedule = pollingLoops.length ? projectPollingSchedule(nodes, connections, pollingLoops) : { nodes, connections };
+    const entryGroups = new Map(pollingLoops.map(loop => [loop.entry, loop.nodes]));
+    const nodeByName = new Map(nodes.map(node => [node.name, node]));
+    const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections).flatMap(node =>
+      entryGroups.get(node.name)?.map(name => nodeByName.get(name)!) ?? [node]
+    );
 
     return {
       id,
@@ -106,6 +115,7 @@ export class CoreWorkflowParser {
       connections,
       orderedNodes,
       triggers,
+      pollingLoops,
     };
   }
 
