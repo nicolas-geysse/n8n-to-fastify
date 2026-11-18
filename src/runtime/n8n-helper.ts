@@ -1,7 +1,7 @@
 export interface N8nItem {
   json: Record<string, any>;
   binary?: Record<string, any>;
-  pairedItem?: { item: number };
+  pairedItem?: { item: number } | { item: number }[];
 }
 
 /**

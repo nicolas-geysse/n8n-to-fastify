@@ -1,6 +1,7 @@
 import { N8nNode } from '../parser';
 import { ExpressionParser } from '../expression-parser';
 import { mapS3Download, s3NodeType } from './s3';
+import { convertToFileType, mapConvertToFile } from './convert-to-file';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -18,6 +19,10 @@ export class NodeMappers {
 
     if (type === s3NodeType) {
       return mapS3Download(ctx);
+    }
+
+    if (type === convertToFileType) {
+      return mapConvertToFile(ctx);
     }
 
     if (type.includes('respondToWebhook')) {
