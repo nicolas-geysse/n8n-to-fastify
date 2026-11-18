@@ -92,7 +92,7 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 | **IF / Filter** | Deterministic branch tracking (`outputIndex 0` vs `1`) |
 | **Switch** | Multi-branch router matching rules + fallback |
 | **Set / Edit Fields** | Object mutation with dot-notation & `keepOnlySet` |
-| **HTTP Request** | Native `fetch()` with headers, JSON body, and error handling |
+| **HTTP Request** | Native `fetch()` with JSON headers and JSON or multipart form bodies |
 | **Aggregate** | In-memory item aggregation |
 | **Split Out** | Expands nested arrays into individual `N8nItem[]` items |
 | **Merge** | Combines or appends parallel execution branches |
@@ -115,6 +115,19 @@ addressing.
 The service downloads each object in order and stores its bytes as
 base64 under the configured binary field, `data` by default. The input
 JSON and other binary fields are preserved.
+
+---
+
+## HTTP Request multipart
+
+HTTP Request supports multipart text fields and n8n binary-file fields
+for POST, PUT and PATCH. A binary field reads the selected input binary
+property, which must contain inline base64 data. Its file name and MIME
+type are used for the uploaded file. The transport adds the multipart
+boundary and calculates the body length.
+
+With Send Headers enabled, JSON header configuration may evaluate to
+a JSON string or an object of header names and values.
 
 ---
 
