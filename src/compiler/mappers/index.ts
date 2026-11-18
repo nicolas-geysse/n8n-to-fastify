@@ -31,7 +31,11 @@ export class NodeMappers {
       return this.mapSubworkflowNode(ctx);
     }
 
-    if (type.includes('if') || type.includes('filter')) {
+    if (type.includes('filter')) {
+      return this.mapFilterNode(ctx);
+    }
+
+    if (type.includes('if')) {
       return this.mapIfNode(ctx);
     }
 
@@ -192,18 +196,24 @@ export class NodeMappers {
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
   }
 
-  private static mapIfNode(ctx: NodeMapperContext): string {
-    const params = ctx.node.parameters || {};
-    const prevVar = ctx.previousVariableName || 'inputItems';
-
+  private static parseConditions(group: any, legacyFilter = false): string {
     const conditions: string[] = [];
 
     // n8n v2 conditions structure
-    if (params.conditions?.conditions && Array.isArray(params.conditions.conditions)) {
-      for (const cond of params.conditions.conditions) {
-        const left = ExpressionParser.parse(cond.leftValue);
-        const right = ExpressionParser.parse(cond.rightValue);
+    if (Array.isArray(group?.conditions)) {
+      for (const cond of group.conditions) {
+        let left = ExpressionParser.parse(cond.leftValue);
+        let right = ExpressionParser.parse(cond.rightValue);
         const op = cond.operator?.operation || 'equals';
+        if (legacyFilter && ['true', 'false', 'gte', 'lte'].includes(op)) {
+          conditions.push(`Boolean(${left})`);
+          continue;
+        }
+        if (!legacyFilter && group.options?.caseSensitive === false && cond.operator?.type === 'string') {
+          const lowerCase = "(value: unknown) => typeof value === 'string' ? value.toLowerCase() : value";
+          left = `((${lowerCase})(${left}))`;
+          right = `((${lowerCase})(${right}))`;
+        }
 
         switch (op) {
           case 'equals':
@@ -217,6 +227,12 @@ export class NodeMappers {
           case 'contains':
             conditions.push(`String(${left} ?? '').includes(String(${right} ?? ''))`);
             break;
+          case 'true':
+            conditions.push(`(${left} === true)`);
+            break;
+          case 'false':
+            conditions.push(`(${left} === false)`);
+            break;
           case 'gt':
           case 'larger':
             conditions.push(`(Number(${left}) > Number(${right}))`);
@@ -224,6 +240,12 @@ export class NodeMappers {
           case 'lt':
           case 'smaller':
             conditions.push(`(Number(${left}) < Number(${right}))`);
+            break;
+          case 'gte':
+            conditions.push(`(Number(${left}) >= Number(${right}))`);
+            break;
+          case 'lte':
+            conditions.push(`(Number(${left}) <= Number(${right}))`);
             break;
           case 'isEmpty':
           case 'empty':
@@ -239,11 +261,16 @@ export class NodeMappers {
       }
     }
 
-    const combinator = params.conditions?.combinator === 'or' ? ' || ' : ' && ';
-    const conditionExpr = conditions.length > 0 ? conditions.join(combinator) : 'true';
+    const combinator = group?.combinator === 'or' ? ' || ' : ' && ';
+    return conditions.length ? conditions.join(combinator) : 'true';
+  }
+
+  private static mapFilterNode(ctx: NodeMapperContext): string {
+    const prevVar = ctx.previousVariableName || 'inputItems';
+    const conditionExpr = this.parseConditions(ctx.node.parameters?.conditions, true);
 
     return `
-    // [Node: ${ctx.node.name}] Conditional Branch (IF)
+    // [Node: ${ctx.node.name}] Filter
     ${ctx.variableName} = ${prevVar} || inputItems;
     item = ${ctx.variableName}[0] || { json: {} };
     {
@@ -253,31 +280,88 @@ export class NodeMappers {
     }`;
   }
 
+  private static mapIfNode(ctx: NodeMapperContext): string {
+    const prevVar = ctx.previousVariableName || 'inputItems';
+    const conditionExpr = this.parseConditions(ctx.node.parameters?.conditions);
+
+    return `
+    // [Node: ${ctx.node.name}] Conditional Branch (IF)
+    ${ctx.variableName} = ${prevVar} || inputItems;
+    {
+      const outputs: N8nItem[][] = [[], []];
+      for (const item of ${ctx.variableName} as N8nItem[]) {
+        const port = (${conditionExpr}) ? 0 : 1;
+        outputs[port].push(item);
+      }
+      ctx.setNodeOutputs(${JSON.stringify(ctx.node.name)}, outputs.entries(), ${ctx.variableName});
+    }
+    item = ${ctx.variableName}[0] || { json: {} };`;
+  }
+
   private static mapSwitchNode(ctx: NodeMapperContext): string {
     const params = ctx.node.parameters || {};
     const prevVar = ctx.previousVariableName || 'inputItems';
-    const rules = params.rules?.values || [];
+    const rules: Array<{ conditions?: unknown }> = params.rules?.values || [];
+    const options = params.options ?? {};
+    const fallback = options.fallbackOutput ?? 'none';
+    const fallbackPort = fallback === 'extra' ? rules.length : fallback;
+    const hasFallback = rules.length > 0 && Number.isInteger(fallbackPort) && fallbackPort >= 0 &&
+      (fallback === 'extra' || fallbackPort < rules.length);
+    const fallbackCode = hasFallback
+      ? `
+        if (!matched) {
+          send(item, ${fallbackPort});
+          matched = true;
+        }`
+      : '';
 
-    const cases: string[] = [];
-    rules.forEach((rule: any, idx: number) => {
-      const cond = rule.conditions?.conditions?.[0];
-      if (cond) {
-        const left = ExpressionParser.parse(cond.leftValue);
-        const right = ExpressionParser.parse(cond.rightValue);
-        cases.push(`if (${left} == ${right}) { matchedIndex = ${idx}; }`);
+    const predicates = rules.map(rule => `(item: N8nItem) => (${rule.conditions ? this.parseConditions(rule.conditions) : 'false'})`);
+    const matchRules = `
+      const predicates = [${predicates.join(', ')}];
+      for (const item of source) {
+        let matched = false;
+        for (const [port, matches] of predicates.entries()) {
+          if (matches(item)) {
+            send(item, port);
+            matched = true;
+            if (!(${ExpressionParser.parse(options.allMatchingOutputs ?? false)})) break;
+          }
+        }
+        ${fallbackCode}
+        if (matched) routed.push(item);
+      }`;
+    const matchExpression = `
+      const numberOutputs = source.length > 0
+        ? ((item: N8nItem) => (${ExpressionParser.parse(params.numberOutputs ?? 4)}))(source[0])
+        : 0;
+      for (const item of source) {
+        const port = ${ExpressionParser.parse(params.output ?? 0)};
+        if (!Number.isSafeInteger(numberOutputs) || !Number.isSafeInteger(port) || port < 0 || port >= numberOutputs) {
+          throw new Error('Switch expression returned an invalid output index');
+        }
+        send(item, port);
+        routed.push(item);
       }
-    });
-
-    const fallbackIndex = rules.length;
+    `;
 
     return `
     // [Node: ${ctx.node.name}] Switch Router
-    ${ctx.variableName} = ${prevVar} || inputItems;
-    item = ${ctx.variableName}[0] || { json: {} };
     {
-      let matchedIndex = ${fallbackIndex};
-      ${cases.join(' else ')}
-      ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName}, matchedIndex);
+      const source: N8nItem[] = ${prevVar} || inputItems;
+      const outputs = new Map<number, N8nItem[]>();
+      const routed: N8nItem[] = [];
+      const send = (item: N8nItem, port: number) => {
+        let items = outputs.get(port);
+        if (!items) {
+          items = [];
+          outputs.set(port, items);
+        }
+        items.push(item);
+      };
+      ${params.mode === 'expression' ? matchExpression : matchRules}
+      ${ctx.variableName} = routed;
+      item = routed[0] || { json: {} };
+      ctx.setNodeOutputs(${JSON.stringify(ctx.node.name)}, outputs, routed);
     }`;
   }
 
@@ -371,7 +455,7 @@ export class NodeMappers {
     const incoming = ctx.node.incomingConnections || [];
     const mode = ctx.node.parameters?.mode || 'append';
     const sources = incoming.map(
-      (c) => `(ctx.isBranchActive(${JSON.stringify(c.sourceNode)}, ${c.outputIndex}) ? (ctx.getNode(${JSON.stringify(c.sourceNode)})?.all() || []) : [])`
+      (c) => `(ctx.getNodeOutput(${JSON.stringify(c.sourceNode)}, ${c.outputIndex}) || [])`
     );
 
     if (mode === 'combine' && sources.length >= 2) {

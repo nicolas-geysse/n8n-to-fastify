@@ -89,8 +89,9 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 | **Respond to Webhook** | `reply.code(status).send(payload)` with JSON/Text support |
 | **Code / Function** | Native async JavaScript execution with `$input`, `$json`, and `$('Node')` bindings |
 | **Execute Workflow** | Direct in-memory function invocation via `WorkflowRegistry` |
-| **IF / Filter** | Deterministic branch tracking (`outputIndex 0` vs `1`) |
-| **Switch** | Multi-branch router matching rules + fallback |
+| **IF** | Routes each item to its true or false output |
+| **Filter** | Deterministic branch tracking |
+| **Switch** | Routes each item by rule or output-index expression, with configurable fallback in rules mode |
 | **Set / Edit Fields** | Object mutation with dot-notation & `keepOnlySet` |
 | **HTTP Request** | Native `fetch()` with headers, JSON body, and error handling |
 | **Aggregate** | In-memory item aggregation |

@@ -12,14 +12,36 @@ export interface NodeAccessor {
  */
 export class WorkflowContext {
   private nodeOutputs = new Map<string, N8nItem[]>();
+  private outputPorts = new Map<string, Map<number, N8nItem[]>>();
   private activeBranches = new Map<string, Set<number>>();
   private executedNodes = new Set<string>();
   public webhookResponse?: { statusCode: number; body: any; headers?: Record<string, string> };
 
   public setNodeOutput(nodeName: string, items: N8nItem[], activeOutputIndex: number = 0): void {
+    this.outputPorts.delete(nodeName);
     this.nodeOutputs.set(nodeName, items);
     this.executedNodes.add(nodeName);
     this.activateBranch(nodeName, activeOutputIndex);
+  }
+
+  public setNodeOutputs(nodeName: string, outputs: Iterable<[number, N8nItem[]]>, items: N8nItem[]): void {
+    this.activeBranches.delete(nodeName);
+    const ports = new Map<number, N8nItem[]>();
+    for (const [port, output] of outputs) {
+      if (output.length > 0) {
+        this.setNodeOutput(nodeName, output, port);
+        ports.set(port, output);
+      }
+    }
+    this.outputPorts.set(nodeName, ports);
+    this.nodeOutputs.set(nodeName, items);
+    this.executedNodes.add(nodeName);
+  }
+
+  public getNodeOutput(nodeName: string, outputIndex: number): N8nItem[] | undefined {
+    if (!this.isBranchActive(nodeName, outputIndex)) return;
+    const ports = this.outputPorts.get(nodeName);
+    return ports ? ports.get(outputIndex) : this.nodeOutputs.get(nodeName);
   }
 
   public activateBranch(nodeName: string, outputIndex: number): void {
