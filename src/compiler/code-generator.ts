@@ -9,6 +9,7 @@ import { rabbitMqTriggerType } from './rabbitmq-trigger';
 import { convertToFileType } from './mappers/convert-to-file';
 import { isRawEditFields, usesRawLegacyNodeReferences } from './mappers/raw-edit-fields';
 import { compressionNodeType } from './mappers/compression';
+import { getDisabledNodeMode } from './disabled-node';
 
 export class CodeGenerator {
   static sanitizeIdentifier(str: string): string {
@@ -81,7 +82,8 @@ const DateTime = {
 
     const triggers = wf.triggers;
     const hasRabbitMqTrigger = triggers.some(node => node.type === rabbitMqTriggerType);
-    const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n));
+    const disabledModes = new Map(wf.orderedNodes.map(node => [node, getDisabledNodeMode(node, wf)]));
+    const nonTriggers = wf.orderedNodes.filter(node => !triggers.includes(node) && disabledModes.get(node) !== 'skip');
 
     triggers.forEach((node) => {
       const index = wf.orderedNodes.indexOf(node);
@@ -106,7 +108,8 @@ const DateTime = {
 
       let branchCheckStr = 'true';
       const incoming = node.incomingConnections ?? [];
-      const runPerIncomingBatch = incoming.length > 0 && !node.type.includes('merge');
+      const passesInput = disabledModes.get(node) === 'passthrough';
+      const runPerIncomingBatch = incoming.length > 0 && (passesInput || !node.type.includes('merge'));
 
       if (incoming.length > 0) {
         const branchChecks = incoming.map(
@@ -115,7 +118,10 @@ const DateTime = {
         branchCheckStr = `(${branchChecks.join(' || ')})`;
       }
 
-      let nodeCode = NodeMappers.mapNode({
+      let nodeCode = passesInput ? `
+    ${varName} = incomingItems || [];
+    item = ${varName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});` : NodeMappers.mapNode({
         node,
         workflowName: wf.name,
         variableName: varName,
@@ -145,7 +151,7 @@ ${nodeCode.trim()}
         ancestorTriggers.length > 0 || hasRabbitMqTrigger ? '      ' : '    ');
     });
 
-    const lastNodeName = wf.orderedNodes[wf.orderedNodes.length - 1]?.name;
+    const lastNodeName = wf.orderedNodes.filter(node => disabledModes.get(node) !== 'skip').at(-1)?.name;
     const returnItemsExpr = lastNodeName
       ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])`
       : `inputItems`;

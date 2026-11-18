@@ -9,6 +9,7 @@ import { convertToFileType, getConvertToFileIssue } from './mappers/convert-to-f
 import { getRawEditFieldsIssue } from './mappers/raw-edit-fields';
 import { continuesCodeOnRegularOutput } from './mappers/code-errors';
 import { compressionNodeType, getCompressionIssue } from './mappers/compression';
+import { getDisabledNodeMode } from './disabled-node';
 
 const supportedNodeTypes = new Set([
   convertToFileType,
@@ -57,11 +58,14 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
   for (const node of workflow.nodes) {
     if (node.type === 'n8n-nodes-base.stickyNote') continue;
     if (node.type === rabbitMqTriggerType && node.disabled) continue;
+    if (node.disabled) {
+      if (!getDisabledNodeMode(node, workflow)) report(node.name, 'disabled node configuration is unsupported');
+      continue;
+    }
     if (!supportedNodeTypes.has(node.type)) {
       report(node.name, `unsupported node type ${JSON.stringify(node.type)}`);
       continue;
     }
-    if (node.disabled) report(node.name, 'disabled nodes can still be executed');
     if (node.continueOnFail) {
       report(node.name, 'legacy continueOnFail is ignored');
     }

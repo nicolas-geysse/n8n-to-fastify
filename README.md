@@ -100,6 +100,7 @@ out of version control.
 | **Respond to Webhook** | `reply.code(status).send(payload)` with JSON/Text support |
 | **Code / Function** | Native async JavaScript execution with `$input`, `$json`, and `$('Node')` bindings |
 | **Code on Error** | JavaScript Code running once for all items can emit `json.error` through its regular output |
+| **Disabled nodes** | Skips detached nodes and passes a single main input through to output 0 |
 | **Execute Workflow** | Direct in-memory function invocation via `WorkflowRegistry` |
 | **IF** | Routes each item to its true or false output |
 | **Filter** | Deterministic branch tracking |
