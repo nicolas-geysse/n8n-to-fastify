@@ -9,6 +9,7 @@ import { convertToFileType, mapConvertToFile } from './convert-to-file';
 import { getRawEditFieldsIssue, isRawEditFields, mapRawEditFields } from './raw-edit-fields';
 import { continuesCodeOnRegularOutput } from './code-errors';
 import { compressionNodeType, mapCompression } from './compression';
+import { mapWaitInterval, waitNodeType } from './wait-interval';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -97,8 +98,8 @@ export class NodeMappers {
       return this.mapLlmNode(ctx);
     }
 
-    if (type.includes('wait')) {
-      return this.mapWaitNode(ctx);
+    if (type === waitNodeType) {
+      return mapWaitInterval(ctx);
     }
 
     return this.mapGenericNode(ctx, `Unmapped Node (${type})`);
@@ -627,22 +628,6 @@ ${legacyBinding}      const result = await (async () => {
       const text = data?.choices?.[0]?.message?.content || '';
       return { json: { text, model: ${JSON.stringify(model)}, usage: data?.usage } };
     }));
-    item = ${ctx.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
-  }
-
-  private static mapWaitNode(ctx: NodeMapperContext): string {
-    const params = ctx.node.parameters || {};
-    const prevVar = ctx.previousVariableName || 'inputItems';
-    const amount = Number(params.amount || 1);
-    const unit = params.unit || 'seconds';
-    const msMultiplier = unit === 'minutes' ? 60000 : unit === 'hours' ? 3600000 : 1000;
-    const delayMs = amount * msMultiplier;
-
-    return `
-    // [Node: ${ctx.node.name}] Non-blocking Async Wait (${amount} ${unit})
-    await new Promise((resolve) => setTimeout(resolve, ${delayMs}));
-    ${ctx.variableName} = ${prevVar} || inputItems;
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
   }

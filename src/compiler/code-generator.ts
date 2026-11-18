@@ -10,6 +10,7 @@ import { convertToFileType } from './mappers/convert-to-file';
 import { isRawEditFields, usesRawLegacyNodeReferences } from './mappers/raw-edit-fields';
 import { compressionNodeType } from './mappers/compression';
 import { getDisabledNodeMode } from './disabled-node';
+import { waitNodeType } from './mappers/wait-interval';
 
 export class CodeGenerator {
   static sanitizeIdentifier(str: string): string {
@@ -57,11 +58,14 @@ export class CodeGenerator {
     const compressionImport = wf.nodes.some(node => node.type === compressionNodeType)
       ? `import { decompressItems } from '${runtimePrefix}/compression';\n`
       : '';
+    const waitImport = wf.nodes.some(node => node.type === waitNodeType)
+      ? `import { waitForInterval } from '${runtimePrefix}/wait-interval';\n`
+      : '';
 
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}${s3Import}${httpRequestImport}${rabbitMqImport}${jsonFileImport}${rawFieldsImport}${compressionImport}
+${positionMergeImport}${legacyImport}${s3Import}${httpRequestImport}${rabbitMqImport}${jsonFileImport}${rawFieldsImport}${compressionImport}${waitImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({

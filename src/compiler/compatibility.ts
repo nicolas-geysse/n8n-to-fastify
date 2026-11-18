@@ -10,6 +10,7 @@ import { getRawEditFieldsIssue } from './mappers/raw-edit-fields';
 import { continuesCodeOnRegularOutput } from './mappers/code-errors';
 import { compressionNodeType, getCompressionIssue } from './mappers/compression';
 import { getDisabledNodeMode } from './disabled-node';
+import { getWaitIntervalIssue, waitNodeType } from './mappers/wait-interval';
 
 const supportedNodeTypes = new Set([
   convertToFileType,
@@ -94,6 +95,10 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     }
     if (node.type === s3NodeType) {
       const issue = getS3DownloadIssue(node);
+      if (issue) report(node.name, issue);
+    }
+    if (node.type === waitNodeType) {
+      const issue = getWaitIntervalIssue(node);
       if (issue) report(node.name, issue);
     }
     if (node.type === 'n8n-nodes-base.httpRequest') {

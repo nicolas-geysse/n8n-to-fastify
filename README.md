@@ -117,7 +117,7 @@ out of version control.
 | **Convert to File** | Converts all input items into a single UTF-8 JSON binary file |
 | **Compression** | Decompresses inline ZIP and GZIP binary fields into separate files |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
-| **Wait** | Non-blocking async `setTimeout` promise |
+| **Wait** | In-process time intervals with version-specific defaults and runtime expressions |
 
 Legacy `$node["Node name"]` references in a Code node running once for all
 items read the first item from the connected output. Use `.json` (or its
