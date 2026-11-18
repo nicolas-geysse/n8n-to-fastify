@@ -107,6 +107,7 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 | **Merge** | Combines or appends parallel execution branches |
 | **PostgreSQL** | Parameterized SQL execution via `DATABASE_URL` |
 | **RabbitMQ** | Publish messages to an existing exchange (`RABBITMQ_URL`) |
+| **RabbitMQ Trigger** | Consume a queue and acknowledge delivery after successful execution |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | Non-blocking async `setTimeout` promise |
 
@@ -189,6 +190,12 @@ Passing `--strict` means no known compatibility issues were detected; always val
 The compiler supports the RabbitMQ **Send Message** operation in **Exchange** mode with default options (`typeVersion` 1 and 1.1). Declare and bind the exchange before starting the service, and set `RABBITMQ_URL` to the broker's AMQP or AMQPS connection URL at runtime. The generated `package.json` includes `amqplib` automatically when a workflow uses this node.
 
 The publisher evaluates the exchange and routing key using the first input item, publishes one JSON message per item, waits for broker confirmation, and returns the n8n `{ success }` output shape.
+
+## 🐇 RabbitMQ Trigger
+
+The compiler supports RabbitMQ Trigger v1 with `executionFinishesSuccessfully` using the same `RABBITMQ_URL`. The generated service checks (or optionally declares via `assertQueue`) and binds the queue, limits unacknowledged deliveries with `parallelMessages`, and skips disabled triggers.
+
+Each delivery triggers the branch with message fields, properties, and text (or parsed JSON when `jsonParseBody` is enabled), acknowledging after success, requeuing on failure, and draining in-flight executions on `SIGINT`/`SIGTERM`.
 
 ---
 

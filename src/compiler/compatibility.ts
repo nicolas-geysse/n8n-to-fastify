@@ -1,8 +1,10 @@
 import type { ParsedWorkflow } from './core-parser';
 import { getRabbitMqPublisherIssue, rabbitMqPublisherType } from './mappers/rabbitmq';
+import { parseRabbitMqTrigger, rabbitMqTriggerType } from './rabbitmq-trigger';
 
 const supportedNodeTypes = new Set([
   rabbitMqPublisherType,
+  rabbitMqTriggerType,
   ...[
     'webhook',
     'respondToWebhook',
@@ -43,6 +45,7 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
 
   for (const node of workflow.nodes) {
     if (node.type === 'n8n-nodes-base.stickyNote') continue;
+    if (node.type === rabbitMqTriggerType && node.disabled) continue;
     if (!supportedNodeTypes.has(node.type)) {
       report(node.name, `unsupported node type ${JSON.stringify(node.type)}`);
       continue;
@@ -57,6 +60,10 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     if (node.type === rabbitMqPublisherType) {
       const issue = getRabbitMqPublisherIssue(node);
       if (issue) report(node.name, issue);
+    }
+    if (node.type === rabbitMqTriggerType) {
+      const options = parseRabbitMqTrigger(node);
+      if (typeof options === 'string') report(node.name, options);
     }
 
     const params = node.parameters ?? {};

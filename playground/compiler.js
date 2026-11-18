@@ -43,6 +43,59 @@
     compileWorkflowJson: () => compileWorkflowJson
   });
 
+  // src/compiler/rabbitmq-trigger.ts
+  var rabbitMqTriggerType = "n8n-nodes-base.rabbitmqTrigger";
+  function getRabbitMqTriggers(workflow) {
+    return workflow.nodes.filter((node) => node.type === rabbitMqTriggerType && !node.disabled);
+  }
+  function isStaticString(value) {
+    return typeof value === "string" && !value.startsWith("=") && !value.includes("{{");
+  }
+  function parseRabbitMqTrigger(node) {
+    if ((node.typeVersion ?? 1) !== 1)
+      return "RabbitMQ Trigger needs typeVersion 1";
+    const { queue, options: rawOptions } = node.parameters ?? {};
+    const options = rawOptions ?? {};
+    if (!isStaticString(queue) || !queue.trim())
+      return "RabbitMQ Trigger needs a static queue name";
+    if (typeof options !== "object" || Array.isArray(options)) {
+      return "RabbitMQ Trigger needs static options";
+    }
+    if (options.acknowledge !== "executionFinishesSuccessfully") {
+      return "RabbitMQ Trigger needs the executionFinishesSuccessfully acknowledgement mode";
+    }
+    if (options.contentIsBinary || options.onlyContent) {
+      return "RabbitMQ Trigger supports text or parsed JSON in the message envelope";
+    }
+    const prefetch = options.parallelMessages ?? -1;
+    if (!Number.isInteger(prefetch) || prefetch !== -1 && (prefetch < 1 || prefetch > 65535)) {
+      return "RabbitMQ Trigger needs parallelMessages between 1 and 65535, or -1";
+    }
+    const bindings = options.binding?.bindings ?? [];
+    if (!Array.isArray(bindings) || !bindings.every((binding) => isStaticString(binding?.exchange) && binding.exchange.length > 0 && isStaticString(binding?.routingKey))) {
+      return "RabbitMQ Trigger needs static exchange names and routing keys in its bindings";
+    }
+    for (const key of ["assertQueue", "durable", "autoDelete", "exclusive", "jsonParseBody"]) {
+      if (options[key] !== undefined && typeof options[key] !== "boolean") {
+        return "RabbitMQ Trigger needs static boolean queue and message settings";
+      }
+    }
+    if (options.assertQueue && Object.keys(options.arguments ?? {}).length > 0) {
+      return "RabbitMQ Trigger queue declaration does not support custom arguments";
+    }
+    return {
+      queue,
+      bindings: bindings.map(({ exchange, routingKey }) => ({ exchange, routingKey })),
+      prefetch: prefetch === -1 ? undefined : prefetch,
+      parseJson: options.jsonParseBody === true,
+      declareQueue: options.assertQueue ? {
+        durable: options.durable,
+        autoDelete: options.autoDelete,
+        exclusive: options.exclusive
+      } : undefined
+    };
+  }
+
   // src/compiler/core-parser.ts
   class CoreWorkflowParser {
     static parseWorkflow(json, fallbackName, relativePath) {
@@ -72,7 +125,7 @@
       nodes.forEach((node) => {
         node.incomingConnections = incomingMap.get(node.name) || [];
       });
-      const triggers = nodes.filter((node) => node.type.includes("webhook") || node.type.includes("trigger") || node.type.includes("cron"));
+      const triggers = nodes.filter((node) => node.type === rabbitMqTriggerType || node.type.includes("webhook") || node.type.includes("trigger") || node.type.includes("cron"));
       const triggerNames = new Set(triggers.map((t) => t.name));
       nodes.forEach((node) => {
         const ancestorTriggers = new Set;
@@ -815,21 +868,26 @@ const DateTime = {
         const varName = `node_${index}_${this.sanitizeIdentifier(node.name)}`;
         nodeVarMap.set(node.name, varName);
       });
-      const triggers = wf.orderedNodes.filter((n) => n.type.includes("webhook") || n.type.includes("trigger") || n.type.includes("cron"));
+      const triggers = wf.triggers;
+      const hasRabbitMqTrigger = triggers.some((node) => node.type === rabbitMqTriggerType);
       const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n));
       triggers.forEach((node) => {
         const index = wf.orderedNodes.indexOf(node);
         const varName = nodeVarMap.get(node.name);
         declCode += `  let ${varName}: any = inputItems;
 `;
-        const rawNodePath = (node.parameters?.path || node.name).toLowerCase().trim().replace(/^\/+/, "");
-        bodyCode += `  const triggerNode_${index} = item?.json?.__triggerNode;
+        const nodeName = JSON.stringify(node.name);
+        let condition = `entryNode === ${nodeName}`;
+        if (node.type !== rabbitMqTriggerType) {
+          const rawNodePath = (node.parameters?.path || node.name).toLowerCase().trim().replace(/^\/+/, "");
+          bodyCode += `  const triggerNode_${index} = item?.json?.__triggerNode;
 `;
-        bodyCode += `  const triggerPath_${index} = item?.json?.__triggerPath;
+          bodyCode += `  const triggerPath_${index} = item?.json?.__triggerPath;
 `;
-        const condition = `!triggerNode_${index} || triggerNode_${index} === ${JSON.stringify(node.name)} || triggerPath_${index} === ${JSON.stringify(rawNodePath)}`;
+          condition = `entryNode === undefined && (!triggerNode_${index} || triggerNode_${index} === ${nodeName} || triggerPath_${index} === ${JSON.stringify(rawNodePath)})`;
+        }
         const nodeCode = `${varName} = inputItems;
-ctx.setNodeOutput(${JSON.stringify(node.name)}, inputItems);`;
+ctx.setNodeOutput(${nodeName}, inputItems);`;
         bodyCode += this.generateNodeBlock(wf.id, node, condition, nodeCode);
       });
       nonTriggers.forEach((node) => {
@@ -859,6 +917,8 @@ ${nodeCode.trim()}
         if (ancestorTriggers.length > 0) {
           const triggerConditions = ancestorTriggers.map((t) => `ctx.hasExecutedNode(${JSON.stringify(t)})`).join(" || ");
           branchCheckStr = `(${triggerConditions}) && ${branchCheckStr}`;
+        } else if (hasRabbitMqTrigger) {
+          branchCheckStr = `entryNode === undefined && ${branchCheckStr}`;
         }
         bodyCode += this.generateNodeBlock(wf.id, node, branchCheckStr, nodeCode, ancestorTriggers.length > 0 ? "      " : "    ");
       });
@@ -868,7 +928,8 @@ ${nodeCode.trim()}
       return `${imports}
 export async function ${functionName}(
   inputItems: N8nItem[] = [{ json: {} }],
-  parentCtx?: WorkflowContext
+  parentCtx?: WorkflowContext,
+  entryNode?: string
 ): Promise<{ items: N8nItem[]; context: WorkflowContext }> {
   const ctx = parentCtx || new WorkflowContext();
   const $env = process.env;
@@ -918,10 +979,23 @@ import { WorkflowContext } from '../runtime/workflow-context';
         importedFunctions.push(functionName);
       });
       let routeDefinitions = "";
+      const rabbitMqStarts = [];
       const registeredRoutes = new Set;
       workflows.forEach((wf) => {
         const functionName = `workflow_${CodeGenerator.sanitizeIdentifier(wf.fileName)}`;
         const webhooks = wf.nodes.filter((node) => node.type.includes("webhook"));
+        for (const node of getRabbitMqTriggers(wf)) {
+          const options = parseRabbitMqTrigger(node);
+          if (typeof options === "string") {
+            throw new Error(`Workflow ${JSON.stringify(wf.name)}, node ${JSON.stringify(node.name)}: ${options}`);
+          }
+          const logContext = JSON.stringify({ workflowId: wf.id, node: node.name });
+          rabbitMqStarts.push(`      stopConsumers.push(await startRabbitMqConsumer(
+        ${JSON.stringify(options)},
+        (items) => ${functionName}(items, undefined, ${JSON.stringify(node.name)}),
+        (message) => fastify.log.error(${logContext}, message),
+      ));`);
+        }
         webhooks.forEach((node) => {
           const rawPath = (node.parameters?.path || wf.fileName).toLowerCase().trim().replace(/^\/+/, "");
           const configuredMethod = (node.parameters?.httpMethod || "POST").toUpperCase();
@@ -981,6 +1055,26 @@ import { WorkflowContext } from '../runtime/workflow-context';
           });
         });
       });
+      if (rabbitMqStarts.length > 0) {
+        imports += `import { startRabbitMqConsumer } from '../runtime/rabbitmq';
+`;
+        routeDefinitions += `
+  const stopConsumers: Array<() => Promise<void>> = [];
+  const closeConsumers = async () => {
+    await Promise.allSettled(stopConsumers.splice(0).map(stop => stop()));
+  };
+  fastify.addHook('onReady', async () => {
+    try {
+${rabbitMqStarts.join(`
+`)}
+    } catch (error) {
+      await closeConsumers();
+      throw error;
+    }
+  });
+  fastify.addHook('onClose', closeConsumers);
+`;
+      }
       return `${imports}
 // Prevent bundler/runtime tree-shaking so subworkflows self-register into WorkflowRegistry
 const _registeredWorkflows = [${importedFunctions.join(", ")}];
@@ -991,7 +1085,16 @@ ${routeDefinitions}
 }
 `;
     }
-    static generateServerEntry() {
+    static generateServerEntry(workflows = []) {
+      const shutdown = workflows.some((workflow) => getRabbitMqTriggers(workflow).length > 0) ? `
+  const close = () => {
+    void fastify.close().catch(error => {
+      fastify.log.error(error);
+      process.exitCode = 1;
+    });
+  };
+  process.once('SIGINT', close);
+  process.once('SIGTERM', close);` : "";
       return `import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { registerCompiledRoutes } from './routes/index';
@@ -1017,7 +1120,7 @@ const host = process.env.HOST || '0.0.0.0';
 
 try {
   await fastify.listen({ port, host });
-  console.log(\`⚡ [n8n-to-fastify] Microservice online at http://\${host}:\${port}\`);
+  console.log(\`⚡ [n8n-to-fastify] Microservice online at http://\${host}:\${port}\`);${shutdown}
 } catch (err) {
   fastify.log.error(err);
   process.exit(1);
@@ -1025,7 +1128,7 @@ try {
 `;
     }
     static generateOutputPackageJson(workflows = [], dependencies = {}) {
-      const needsRabbitMq = workflows.some((workflow) => workflow.nodes.some((node) => node.type === rabbitMqPublisherType));
+      const needsRabbitMq = workflows.some((workflow) => getRabbitMqTriggers(workflow).length > 0 || workflow.nodes.some((node) => node.type === rabbitMqPublisherType));
       return JSON.stringify({
         name: "compiled-n8n-service",
         version: "1.0.0",

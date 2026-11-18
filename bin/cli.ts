@@ -100,7 +100,7 @@ const compile = program
       RouteGenerator.generateRoutesCode(workflows),
       'utf8'
     );
-    fs.writeFileSync(path.join(outDir, 'server.ts'), RouteGenerator.generateServerEntry(), 'utf8');
+    fs.writeFileSync(path.join(outDir, 'server.ts'), RouteGenerator.generateServerEntry(workflows), 'utf8');
     fs.writeFileSync(
       path.join(outDir, 'package.json'),
       RouteGenerator.generateOutputPackageJson(workflows, dependencies),

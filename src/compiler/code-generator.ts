@@ -1,6 +1,7 @@
 import { N8nNode, ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
+import { rabbitMqTriggerType } from './rabbitmq-trigger';
 
 export class CodeGenerator {
   static sanitizeIdentifier(str: string): string {
@@ -42,9 +43,8 @@ const DateTime = {
       nodeVarMap.set(node.name, varName);
     });
 
-    const triggers = wf.orderedNodes.filter(
-      (n) => n.type.includes('webhook') || n.type.includes('trigger') || n.type.includes('cron')
-    );
+    const triggers = wf.triggers;
+    const hasRabbitMqTrigger = triggers.some(node => node.type === rabbitMqTriggerType);
     const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n));
 
     triggers.forEach((node) => {
@@ -52,11 +52,15 @@ const DateTime = {
       const varName = nodeVarMap.get(node.name)!;
       declCode += `  let ${varName}: any = inputItems;\n`;
 
-      const rawNodePath = (node.parameters?.path || node.name).toLowerCase().trim().replace(/^\/+/, '');
-      bodyCode += `  const triggerNode_${index} = item?.json?.__triggerNode;\n`;
-      bodyCode += `  const triggerPath_${index} = item?.json?.__triggerPath;\n`;
-      const condition = `!triggerNode_${index} || triggerNode_${index} === ${JSON.stringify(node.name)} || triggerPath_${index} === ${JSON.stringify(rawNodePath)}`;
-      const nodeCode = `${varName} = inputItems;\nctx.setNodeOutput(${JSON.stringify(node.name)}, inputItems);`;
+      const nodeName = JSON.stringify(node.name);
+      let condition = `entryNode === ${nodeName}`;
+      if (node.type !== rabbitMqTriggerType) {
+        const rawNodePath = (node.parameters?.path || node.name).toLowerCase().trim().replace(/^\/+/, '');
+        bodyCode += `  const triggerNode_${index} = item?.json?.__triggerNode;\n`;
+        bodyCode += `  const triggerPath_${index} = item?.json?.__triggerPath;\n`;
+        condition = `entryNode === undefined && (!triggerNode_${index} || triggerNode_${index} === ${nodeName} || triggerPath_${index} === ${JSON.stringify(rawNodePath)})`;
+      }
+      const nodeCode = `${varName} = inputItems;\nctx.setNodeOutput(${nodeName}, inputItems);`;
       bodyCode += this.generateNodeBlock(wf.id, node, condition, nodeCode);
     });
 
@@ -97,6 +101,8 @@ ${nodeCode.trim()}
           .map((t) => `ctx.hasExecutedNode(${JSON.stringify(t)})`)
           .join(' || ');
         branchCheckStr = `(${triggerConditions}) && ${branchCheckStr}`;
+      } else if (hasRabbitMqTrigger) {
+        branchCheckStr = `entryNode === undefined && ${branchCheckStr}`;
       }
       bodyCode += this.generateNodeBlock(wf.id, node, branchCheckStr, nodeCode,
         ancestorTriggers.length > 0 ? '      ' : '    ');
@@ -112,7 +118,8 @@ ${nodeCode.trim()}
     return `${imports}
 export async function ${functionName}(
   inputItems: N8nItem[] = [{ json: {} }],
-  parentCtx?: WorkflowContext
+  parentCtx?: WorkflowContext,
+  entryNode?: string
 ): Promise<{ items: N8nItem[]; context: WorkflowContext }> {
   const ctx = parentCtx || new WorkflowContext();
   const $env = process.env;
