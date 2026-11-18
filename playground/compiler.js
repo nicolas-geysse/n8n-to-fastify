@@ -843,7 +843,8 @@ ${body}
   // src/compiler/route-generator.ts
   class RouteGenerator {
     static generateRoutesCode(workflows) {
-      let imports = `import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+      let imports = `import { randomUUID } from 'node:crypto';
+import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { N8nItem } from '../runtime/n8n-helper';
 import { WorkflowContext } from '../runtime/workflow-context';
 `;
@@ -906,10 +907,11 @@ import { WorkflowContext } from '../runtime/workflow-context';
         }
         reply.code(200);
         return items.length === 1 ? items[0].json : items.map(i => i.json);
-      } catch (err: any) {
-        request.log.error(err);
+      } catch {
+        const errorId = randomUUID();
+        request.log.error({ errorId }, 'Workflow execution failed');
         reply.code(500);
-        return { error: 'Workflow Execution Error', message: err.message };
+        return { error: 'Workflow Execution Error', message: 'Workflow execution failed', errorId };
       }
     }
   });
