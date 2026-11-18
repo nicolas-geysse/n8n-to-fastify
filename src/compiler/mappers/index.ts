@@ -1,5 +1,6 @@
 import { N8nNode } from '../parser';
 import { ExpressionParser } from '../expression-parser';
+import { isPositionMerge, mapPositionMerge } from './position-merge';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -60,7 +61,7 @@ export class NodeMappers {
     }
 
     if (type.includes('merge')) {
-      return this.mapMergeNode(ctx);
+      return isPositionMerge(ctx.node) ? mapPositionMerge(ctx) : this.mapMergeNode(ctx);
     }
 
     if (type.includes('postgres')) {

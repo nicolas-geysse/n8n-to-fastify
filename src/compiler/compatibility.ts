@@ -1,4 +1,5 @@
 import type { ParsedWorkflow } from './core-parser';
+import { getPositionMergeIssue, isPositionMerge } from './mappers/position-merge';
 
 const supportedNodeTypes = new Set([
   ...[
@@ -68,7 +69,10 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     if (node.type === 'n8n-nodes-base.set' && params.mode === 'raw') {
       report(node.name, 'raw JSON mode is ignored');
     }
-    if (node.type === 'n8n-nodes-base.merge' && params.mode === 'combine' &&
+    if (isPositionMerge(node)) {
+      const issue = getPositionMergeIssue(node);
+      if (issue) report(node.name, issue);
+    } else if (node.type === 'n8n-nodes-base.merge' && params.mode === 'combine' &&
       (Number(params.numberInputs) > 2 || (node.incomingConnections?.length ?? 0) > 2)) {
       report(node.name, 'combine mode reads at most two inputs');
     }

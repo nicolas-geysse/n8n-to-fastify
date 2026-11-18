@@ -1,5 +1,6 @@
 import { ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
+import { isPositionMerge } from './mappers/position-merge';
 
 export class CodeGenerator {
   static sanitizeIdentifier(str: string): string {
@@ -16,11 +17,14 @@ export class CodeGenerator {
     const functionName = `workflow_${this.sanitizeIdentifier(wf.fileName)}`;
     const depth = (wf.relativePath.match(/\//g) || []).length;
     const runtimePrefix = '../'.repeat(depth + 1) + 'runtime';
+    const positionMergeImport = wf.nodes.some(isPositionMerge)
+      ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';\n`
+      : '';
 
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-
+${positionMergeImport}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),

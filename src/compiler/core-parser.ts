@@ -9,8 +9,14 @@ export interface N8nNode {
   disabled?: boolean;
   continueOnFail?: boolean;
   onError?: string;
-  incomingConnections?: { sourceNode: string; outputIndex: number }[];
+  incomingConnections?: N8nIncomingConnection[];
   ancestorTriggers?: string[];
+}
+
+export interface N8nIncomingConnection {
+  sourceNode: string;
+  outputIndex: number;
+  inputIndex?: number;
 }
 
 export interface N8nConnectionTarget {
@@ -45,7 +51,7 @@ export class CoreWorkflowParser {
     const connections = json.connections || {};
     const relPath = relativePath || `${fallbackName}.json`;
 
-    const incomingMap = new Map<string, { sourceNode: string; outputIndex: number }[]>();
+    const incomingMap = new Map<string, N8nIncomingConnection[]>();
     nodes.forEach((n) => incomingMap.set(n.name, []));
 
     Object.entries(connections).forEach(([sourceNodeName, outputs]: [string, any]) => {
@@ -54,7 +60,11 @@ export class CoreWorkflowParser {
           if (Array.isArray(outputTargets)) {
             outputTargets.forEach((target) => {
               if (target && target.node && incomingMap.has(target.node)) {
-                incomingMap.get(target.node)?.push({ sourceNode: sourceNodeName, outputIndex });
+                incomingMap.get(target.node)?.push({
+                  sourceNode: sourceNodeName,
+                  outputIndex,
+                  inputIndex: target.index ?? 0,
+                });
               }
             });
           }

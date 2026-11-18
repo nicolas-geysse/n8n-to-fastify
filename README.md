@@ -96,7 +96,7 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 | **HTTP Request** | Native `fetch()` with headers, JSON body, and error handling |
 | **Aggregate** | In-memory item aggregation |
 | **Split Out** | Expands nested arrays into individual `N8nItem[]` items |
-| **Merge** | Combines or appends parallel execution branches |
+| **Merge** | Appends branches or combines items by position across up to ten destination ports |
 | **PostgreSQL** | Parameterized SQL execution via `DATABASE_URL` |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | Non-blocking async `setTimeout` promise |
@@ -145,8 +145,8 @@ bun run compile ./workflows --strict --out ./compiled-service
 In strict mode, the CLI reports known unsupported features by workflow and
 node and stops before writing output. Checks include unsupported nodes,
 non-main connections, disabled nodes, unsupported error handling, selected
-HTTP Request and Edit Fields options, and Combine mode with more than two
-inputs. In strict mode, put only workflow exports in the input directory.
+HTTP Request and Edit Fields options, and unsupported Merge configurations.
+In strict mode, put only workflow exports in the input directory.
 Invalid JSON and JSON files without a workflow stop compilation.
 
 Passing these checks means none of the known issues were detected. To verify
