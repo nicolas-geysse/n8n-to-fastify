@@ -4,6 +4,7 @@ import { isPositionMerge, mapPositionMerge } from './position-merge';
 import { getLegacyNodeReferenceIssue } from './code-context';
 import { mapRabbitMqPublisher, rabbitMqPublisherType } from './rabbitmq';
 import { mapS3Download, s3NodeType } from './s3';
+import { convertToFileType, mapConvertToFile } from './convert-to-file';
 import { generateMultipartBody, getMultipartIssue, usesJsonHeaders, usesMultipartBody } from './http-request';
 
 export interface NodeMapperContext {
@@ -26,6 +27,10 @@ export class NodeMappers {
 
     if (type === s3NodeType) {
       return mapS3Download(ctx);
+    }
+
+    if (type === convertToFileType) {
+      return mapConvertToFile(ctx);
     }
 
     if (type.includes('respondToWebhook')) {

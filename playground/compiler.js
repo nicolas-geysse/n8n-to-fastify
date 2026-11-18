@@ -444,6 +444,50 @@
     }`;
   }
 
+  // src/compiler/mappers/convert-to-file.ts
+  var convertToFileType = "n8n-nodes-base.convertToFile";
+  function getConvertToFileIssue(node) {
+    const params = node.parameters ?? {};
+    const version = node.typeVersion ?? 1;
+    if (version !== 1 && version !== 1.1 || params.operation !== "toJson") {
+      return "Convert to File supports Convert to JSON on node versions 1 and 1.1";
+    }
+    if ((params.mode ?? "once") !== "once") {
+      return "Convert to JSON supports the All Items to One File mode";
+    }
+    if (!["utf8", "utf-8"].includes(params.options?.encoding ?? "utf8")) {
+      return "Convert to JSON supports UTF-8 encoding";
+    }
+  }
+  function mapConvertToFile(ctx) {
+    const issue = getConvertToFileIssue(ctx.node);
+    if (issue)
+      throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
+    const params = ctx.node.parameters ?? {};
+    const options = params.options ?? {};
+    const source = ctx.previousVariableName ?? "inputItems";
+    const binaryProperty = ExpressionParser.parse(params.binaryPropertyName ?? "data");
+    const fileName = ExpressionParser.parse(options.fileName ?? "");
+    const format = ExpressionParser.parse(options.format ?? false);
+    const addBOM = ExpressionParser.parse(options.addBOM ?? false);
+    return `
+    {
+      const source: N8nItem[] = ${source} || inputItems;
+      ${ctx.variableName} = [];
+      if (source.length > 0) {
+        const item = source[0];
+        ${ctx.variableName} = [convertItemsToJsonFile(source, {
+          binaryProperty: String(${binaryProperty} ?? ''),
+          fileName: String(${fileName} ?? ''),
+          format: Boolean(${format}),
+          addBOM: Boolean(${addBOM}),
+        })];
+      }
+    }
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+  }
+
   // src/compiler/mappers/http-request.ts
   function usesMultipartBody(params) {
     return params?.sendBody === true && params.contentType === "multipart-form-data";
@@ -491,6 +535,9 @@
       }
       if (type === s3NodeType) {
         return mapS3Download(ctx);
+      }
+      if (type === convertToFileType) {
+        return mapConvertToFile(ctx);
       }
       if (type.includes("respondToWebhook")) {
         return this.mapRespondToWebhookNode(ctx);
@@ -1033,12 +1080,14 @@ ${legacyBinding}      const result = await (async () => {
 ` : "";
       const s3Import = wf.nodes.some((node) => node.type === s3NodeType) ? `import { downloadS3Files } from '${runtimePrefix}/s3';
 ` : "";
+      const jsonFileImport = wf.nodes.some((node) => node.type === convertToFileType) ? `import { convertItemsToJsonFile } from '${runtimePrefix}/convert-to-json';
+` : "";
       const httpRequestImport = wf.nodes.some((node) => node.type.includes("httpRequest") && (usesMultipartBody(node.parameters) || usesJsonHeaders(node.parameters))) ? `import { createRequestForm, parseRequestHeaders } from '${runtimePrefix}/http-request';
 ` : "";
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}${rabbitMqImport}${s3Import}${httpRequestImport}
+${positionMergeImport}${legacyImport}${rabbitMqImport}${s3Import}${jsonFileImport}${httpRequestImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({
@@ -1319,6 +1368,7 @@ try {
     static generateOutputPackageJson(workflows = [], dependencies = {}) {
       const needsRabbitMq = workflows.some((workflow) => getRabbitMqTriggers(workflow).length > 0 || workflow.nodes.some((node) => node.type === rabbitMqPublisherType));
       const needsS3 = workflows.some((workflow) => workflow.nodes.some((node) => node.type === s3NodeType));
+      const needsMimeTypes = needsS3 || workflows.some((workflow) => workflow.nodes.some((node) => node.type === convertToFileType));
       return JSON.stringify({
         name: "compiled-n8n-service",
         version: "1.0.0",
@@ -1331,7 +1381,8 @@ try {
           "@fastify/cors": "^9.0.1",
           fastify: "^4.28.1",
           ...needsRabbitMq ? { amqplib: "^0.10.9" } : {},
-          ...needsS3 ? { "@aws-sdk/client-s3": "3.808.0", "mime-types": "^3.0.1" } : {},
+          ...needsS3 ? { "@aws-sdk/client-s3": "3.808.0" } : {},
+          ...needsMimeTypes ? { "mime-types": "^3.0.1" } : {},
           ...dependencies
         }
       }, null, 2);

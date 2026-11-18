@@ -3,10 +3,12 @@ import { getPositionMergeIssue, isPositionMerge } from './mappers/position-merge
 import { getLegacyNodeReferenceIssue } from './mappers/code-context';
 import { getRabbitMqPublisherIssue, rabbitMqPublisherType } from './mappers/rabbitmq';
 import { getS3DownloadIssue, s3NodeType } from './mappers/s3';
+import { convertToFileType, getConvertToFileIssue } from './mappers/convert-to-file';
 import { getMultipartIssue, usesMultipartBody } from './mappers/http-request';
 import { parseRabbitMqTrigger, rabbitMqTriggerType } from './rabbitmq-trigger';
 
 const supportedNodeTypes = new Set([
+  convertToFileType,
   rabbitMqPublisherType,
   rabbitMqTriggerType,
   s3NodeType,
@@ -74,6 +76,10 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     const params = node.parameters ?? {};
     const codeIssue = getLegacyNodeReferenceIssue(node);
     if (codeIssue) report(node.name, codeIssue);
+    if (node.type === convertToFileType) {
+      const issue = getConvertToFileIssue(node);
+      if (issue) report(node.name, issue);
+    }
     if (node.type === s3NodeType) {
       const issue = getS3DownloadIssue(node);
       if (issue) report(node.name, issue);
