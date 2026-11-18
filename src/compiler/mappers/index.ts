@@ -2,6 +2,7 @@ import { N8nNode } from '../parser';
 import { ExpressionParser } from '../expression-parser';
 import { isPositionMerge, mapPositionMerge } from './position-merge';
 import { getLegacyNodeReferenceIssue } from './code-context';
+import { getRawEditFieldsIssue, isRawEditFields, mapRawEditFields } from './raw-edit-fields';
 import { mapRabbitMqPublisher, rabbitMqPublisherType } from './rabbitmq';
 import { mapS3Download, s3NodeType } from './s3';
 import { convertToFileType, mapConvertToFile } from './convert-to-file';
@@ -62,6 +63,7 @@ export class NodeMappers {
     }
 
     if (type.includes('set')) {
+      if (isRawEditFields(ctx.node) && !getRawEditFieldsIssue(ctx.node)) return mapRawEditFields(ctx);
       return this.mapSetNode(ctx);
     }
 

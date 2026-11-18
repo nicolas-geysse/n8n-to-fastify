@@ -226,7 +226,7 @@
 
   // src/compiler/expression-parser.ts
   class ExpressionParser {
-    static parse(expression, firstInputItem) {
+    static parse(expression, firstInputItem, inputItems = "inputItems") {
       if (expression === undefined || expression === null) {
         return JSON.stringify("");
       }
@@ -242,7 +242,7 @@
         if (innerContent.startsWith("{{") && innerContent.endsWith("}}")) {
           const between = innerContent.substring(2, innerContent.length - 2).trim();
           if (!between.includes("{{") && !between.includes("}}")) {
-            const transformed = this.transformTokens(between, firstInputItem);
+            const transformed = this.transformTokens(between, firstInputItem, inputItems);
             return `(${transformed})`;
           }
         }
@@ -251,7 +251,7 @@
       const replacements = [];
       let placeholderIdx = 0;
       const tokenized = expr.replace(/\{\{(.*?)\}\}/g, (_, inner) => {
-        const transformed = this.transformTokens(inner.trim(), firstInputItem);
+        const transformed = this.transformTokens(inner.trim(), firstInputItem, inputItems);
         const placeholder = `__EXPR_PLACEHOLDER_${placeholderIdx++}__`;
         replacements.push(`\${(${transformed}) ?? ''}`);
         return placeholder;
@@ -262,7 +262,7 @@
       });
       return `\`${safeLiteral}\``;
     }
-    static transformTokens(code, firstInputItem) {
+    static transformTokens(code, firstInputItem, inputItems) {
       let result = code;
       result = result.replace(/\$now\b/g, "new Date().toISOString()");
       result = result.replace(/\$today\b/g, 'new Date().toISOString().split("T")[0]');
@@ -290,7 +290,7 @@
       if (firstInputItem)
         result = result.replace(/\$input\.first\(\)/g, firstInputItem);
       result = result.replace(/\$input\.item\.json/g, "item?.json");
-      result = result.replace(/\$input\.all\(\)/g, "inputItems");
+      result = result.replace(/\$input\.all\(\)/g, inputItems);
       result = result.replace(/\$env\.([a-zA-Z0-9_]+)/g, (_, envVar) => {
         return `process.env.${envVar}`;
       });
@@ -368,6 +368,80 @@
       }
     }
     return [...upstream];
+  }
+
+  // src/compiler/mappers/raw-edit-fields.ts
+  function isRawEditFields(node) {
+    return node.type === "n8n-nodes-base.set" && node.parameters?.mode === "raw";
+  }
+  function usesRawLegacyNodeReferences(node) {
+    const value = node.parameters?.jsonOutput;
+    return isRawEditFields(node) && typeof value === "string" && value.startsWith("=") && /\{\{[\s\S]*?\$node\b[\s\S]*?\}\}/.test(value);
+  }
+  function getRawEditFieldsIssue(node) {
+    if (!isRawEditFields(node))
+      return;
+    if (node.typeVersion !== 3.4)
+      return "Edit Fields JSON Output requires node version 3.4";
+    const params = node.parameters;
+    const { dotNotation, stripBinary } = params.options ?? {};
+    if ([params.includeOtherFields, dotNotation, stripBinary].some((value) => value !== undefined && typeof value !== "boolean")) {
+      return "Edit Fields JSON Output requires static field and binary options";
+    }
+    if (params.includeOtherFields !== false && params.includeOtherFields !== undefined && !["all", "none"].includes(params.include ?? "all")) {
+      return "Edit Fields JSON Output supports including all or none of the input fields";
+    }
+    if (params.duplicateItem)
+      return "Edit Fields JSON Output does not support manual item duplication";
+  }
+  function compileJsonOutput(value) {
+    if (typeof value !== "string" || !value.startsWith("="))
+      return JSON.stringify(value);
+    const template = value.replace(/^=+/, "");
+    const compileExpression = (expression) => ExpressionParser.parse("=" + expression, "source[0]", "source");
+    const trimmed = template.trim();
+    if (trimmed.startsWith("{{") && trimmed.endsWith("}}") && !trimmed.slice(2, -2).includes("{{")) {
+      return compileExpression(trimmed);
+    }
+    const fragments = [];
+    let offset = 0;
+    let quoted = false;
+    for (const expression of template.matchAll(/\{\{([\s\S]*?)\}\}/g)) {
+      const literal = template.slice(offset, expression.index);
+      for (const [token] of literal.matchAll(/\\[\s\S]|"/g)) {
+        if (token === '"')
+          quoted = !quoted;
+      }
+      fragments.push(JSON.stringify(literal));
+      fragments.push("encodeJsonTemplateValue(" + compileExpression(expression[0]) + ", " + quoted + ")");
+      offset = expression.index + expression[0].length;
+    }
+    fragments.push(JSON.stringify(template.slice(offset)));
+    return "[" + fragments.join(", ") + "].join('')";
+  }
+  function mapRawEditFields(ctx) {
+    const params = ctx.node.parameters;
+    const options = params.options ?? {};
+    const jsonOutput = compileJsonOutput(params.jsonOutput === undefined ? { my_field_1: "value", my_field_2: 1 } : params.jsonOutput);
+    const includeAll = params.includeOtherFields === true && (params.include ?? "all") === "all";
+    const stripBinary = options.stripBinary ?? true;
+    const dotNotation = options.dotNotation ?? true;
+    const legacyBinding = ctx.legacyNodePorts ? "const $node = createLegacyNodeReferences(ctx, legacyNodeNames, " + JSON.stringify(ctx.legacyNodePorts) + ", itemIndex);" : "";
+    return [
+      "{",
+      "  const source: N8nItem[] = " + (ctx.previousVariableName ?? "inputItems") + ";",
+      "  " + ctx.variableName + " = source.map((item, itemIndex) => {",
+      ...legacyBinding ? ["    " + legacyBinding] : [],
+      "    return applyRawEditFields(item, itemIndex, " + jsonOutput + ", {",
+      "      includeAll: " + includeAll + ", stripBinary: " + stripBinary + ",",
+      "      dotNotation: " + dotNotation + ",",
+      "    });",
+      "  });",
+      "}",
+      "item = " + ctx.variableName + "[0] || { json: {} };",
+      "ctx.setNodeOutput(" + JSON.stringify(ctx.node.name) + ", " + ctx.variableName + ");"
+    ].join(`
+`);
   }
 
   // src/compiler/mappers/rabbitmq.ts
@@ -561,6 +635,8 @@
         return this.mapSwitchNode(ctx);
       }
       if (type.includes("set")) {
+        if (isRawEditFields(ctx.node) && !getRawEditFieldsIssue(ctx.node))
+          return mapRawEditFields(ctx);
         return this.mapSetNode(ctx);
       }
       if (type.includes("httpRequest")) {
@@ -1070,7 +1146,9 @@ ${legacyBinding}      const result = await (async () => {
       const runtimePrefix = "../".repeat(depth + 1) + "runtime";
       const positionMergeImport = wf.nodes.some(isPositionMerge) ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';
 ` : "";
-      const legacyNodes = new Set(wf.nodes.filter(usesLegacyNodeReferences));
+      const legacyNodes = new Set(wf.nodes.filter((node) => usesLegacyNodeReferences(node) || usesRawLegacyNodeReferences(node)));
+      const rawFieldsImport = wf.nodes.some(isRawEditFields) ? `import { applyRawEditFields, encodeJsonTemplateValue } from '${runtimePrefix}/raw-edit-fields';
+` : "";
       const legacyImport = legacyNodes.size > 0 ? `import { createLegacyNodeReferences } from '${runtimePrefix}/code-context';
 ` : "";
       const legacyNames = legacyNodes.size > 0 ? `const legacyNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map((node) => node.name))});
@@ -1087,7 +1165,7 @@ ${legacyBinding}      const result = await (async () => {
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}${rabbitMqImport}${s3Import}${jsonFileImport}${httpRequestImport}
+${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${jsonFileImport}${httpRequestImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({

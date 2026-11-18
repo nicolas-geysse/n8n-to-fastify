@@ -2,6 +2,7 @@ import { N8nNode, ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
 import { isPositionMerge } from './mappers/position-merge';
 import { collectLegacyNodePorts, usesLegacyNodeReferences } from './mappers/code-context';
+import { isRawEditFields, usesRawLegacyNodeReferences } from './mappers/raw-edit-fields';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
 import { s3NodeType } from './mappers/s3';
 import { convertToFileType } from './mappers/convert-to-file';
@@ -26,7 +27,12 @@ export class CodeGenerator {
     const positionMergeImport = wf.nodes.some(isPositionMerge)
       ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';\n`
       : '';
-    const legacyNodes = new Set(wf.nodes.filter(usesLegacyNodeReferences));
+    const legacyNodes = new Set(wf.nodes.filter(node =>
+      usesLegacyNodeReferences(node) || usesRawLegacyNodeReferences(node)
+    ));
+    const rawFieldsImport = wf.nodes.some(isRawEditFields)
+      ? `import { applyRawEditFields, encodeJsonTemplateValue } from '${runtimePrefix}/raw-edit-fields';\n`
+      : '';
     const legacyImport = legacyNodes.size > 0
       ? `import { createLegacyNodeReferences } from '${runtimePrefix}/code-context';\n`
       : '';
@@ -50,7 +56,7 @@ export class CodeGenerator {
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}${rabbitMqImport}${s3Import}${jsonFileImport}${httpRequestImport}
+${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${jsonFileImport}${httpRequestImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({
