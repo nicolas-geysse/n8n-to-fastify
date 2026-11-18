@@ -1600,7 +1600,7 @@ ctx.setNodeOutput(${nodeName}, inputItems);`;
           return;
         let branchCheckStr = "true";
         const incoming = node.incomingConnections ?? [];
-        const runPerIncomingBatch = incoming.length > 0 && !node.type.includes("merge");
+        const runPerIncomingBatch = incoming.length > 0 && (disabledModes.get(node) === "passthrough" || !node.type.includes("merge"));
         if (incoming.length > 0) {
           const branchChecks = incoming.map((conn) => `ctx.isBranchActive(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`);
           branchCheckStr = `(${branchChecks.join(" || ")})`;
