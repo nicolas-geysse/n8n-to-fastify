@@ -79,6 +79,10 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
   -d '{"name": "Invalid", "email": "not-an-email"}'
 ```
 
+Unexpected workflow exceptions return a generic HTTP 500 response with an
+`errorId`. The generated handler records the same ID in its error log so a
+client report can be correlated with the server log.
+
 ---
 
 ## 🧩 Supported Nodes (v0.1)
