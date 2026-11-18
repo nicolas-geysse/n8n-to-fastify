@@ -8,6 +8,7 @@ import { mapRabbitMqPublisher, rabbitMqPublisherType } from './rabbitmq';
 import { convertToFileType, mapConvertToFile } from './convert-to-file';
 import { getRawEditFieldsIssue, isRawEditFields, mapRawEditFields } from './raw-edit-fields';
 import { continuesCodeOnRegularOutput } from './code-errors';
+import { compressionNodeType, mapCompression } from './compression';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -33,6 +34,10 @@ export class NodeMappers {
 
     if (type === convertToFileType) {
       return mapConvertToFile(ctx);
+    }
+
+    if (type === compressionNodeType) {
+      return mapCompression(ctx);
     }
 
     if (type.includes('respondToWebhook')) {

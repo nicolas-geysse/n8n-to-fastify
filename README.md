@@ -114,6 +114,7 @@ out of version control.
 | **RabbitMQ** | Publish messages to an existing exchange |
 | **RabbitMQ Trigger** | Consume a queue and acknowledge delivery after successful execution |
 | **Convert to File** | Converts all input items into a single UTF-8 JSON binary file |
+| **Compression** | Decompresses inline ZIP and GZIP binary fields into separate files |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | Non-blocking async `setTimeout` promise |
 

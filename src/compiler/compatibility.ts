@@ -8,9 +8,11 @@ import { parseRabbitMqTrigger, rabbitMqTriggerType } from './rabbitmq-trigger';
 import { convertToFileType, getConvertToFileIssue } from './mappers/convert-to-file';
 import { getRawEditFieldsIssue } from './mappers/raw-edit-fields';
 import { continuesCodeOnRegularOutput } from './mappers/code-errors';
+import { compressionNodeType, getCompressionIssue } from './mappers/compression';
 
 const supportedNodeTypes = new Set([
   convertToFileType,
+  compressionNodeType,
   s3NodeType,
   rabbitMqPublisherType,
   rabbitMqTriggerType,
@@ -80,6 +82,10 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     if (codeIssue) report(node.name, codeIssue);
     if (node.type === convertToFileType) {
       const issue = getConvertToFileIssue(node);
+      if (issue) report(node.name, issue);
+    }
+    if (node.type === compressionNodeType) {
+      const issue = getCompressionIssue(node);
       if (issue) report(node.name, issue);
     }
     if (node.type === s3NodeType) {

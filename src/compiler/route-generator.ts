@@ -4,6 +4,7 @@ import { s3NodeType } from './mappers/s3';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
 import { getRabbitMqTriggers, parseRabbitMqTrigger } from './rabbitmq-trigger';
 import { convertToFileType } from './mappers/convert-to-file';
+import { compressionNodeType } from './mappers/compression';
 
 export class RouteGenerator {
   /**
@@ -195,11 +196,12 @@ try {
     dependencies: Record<string, string> = {},
   ): string {
     const needsS3 = workflows.some(workflow => workflow.nodes.some(node => node.type === s3NodeType));
+    const needsCompression = workflows.some(workflow => workflow.nodes.some(node => node.type === compressionNodeType));
     const needsRabbitMq = workflows.some((workflow) =>
       getRabbitMqTriggers(workflow).length > 0 ||
       workflow.nodes.some((node) => node.type === rabbitMqPublisherType)
     );
-    const needsMimeTypes = needsS3 ||
+    const needsMimeTypes = needsS3 || needsCompression ||
       workflows.some(workflow => workflow.nodes.some(node => node.type === convertToFileType));
     return JSON.stringify(
       {
@@ -214,6 +216,7 @@ try {
           '@fastify/cors': '^9.0.1',
           fastify: '^4.28.1',
           ...(needsS3 ? { '@aws-sdk/client-s3': '3.808.0' } : {}),
+          ...(needsCompression ? { fflate: '0.8.3' } : {}),
           ...(needsMimeTypes ? { 'mime-types': '^3.0.1' } : {}),
           ...(needsRabbitMq ? { amqplib: '^0.10.9' } : {}),
           ...dependencies,

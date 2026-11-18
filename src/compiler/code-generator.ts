@@ -8,6 +8,7 @@ import { rabbitMqPublisherType } from './mappers/rabbitmq';
 import { rabbitMqTriggerType } from './rabbitmq-trigger';
 import { convertToFileType } from './mappers/convert-to-file';
 import { isRawEditFields, usesRawLegacyNodeReferences } from './mappers/raw-edit-fields';
+import { compressionNodeType } from './mappers/compression';
 
 export class CodeGenerator {
   static sanitizeIdentifier(str: string): string {
@@ -52,11 +53,14 @@ export class CodeGenerator {
     const jsonFileImport = wf.nodes.some(node => node.type === convertToFileType)
       ? `import { convertItemsToJsonFile } from '${runtimePrefix}/convert-to-json';\n`
       : '';
+    const compressionImport = wf.nodes.some(node => node.type === compressionNodeType)
+      ? `import { decompressItems } from '${runtimePrefix}/compression';\n`
+      : '';
 
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}${s3Import}${httpRequestImport}${rabbitMqImport}${jsonFileImport}${rawFieldsImport}
+${positionMergeImport}${legacyImport}${s3Import}${httpRequestImport}${rabbitMqImport}${jsonFileImport}${rawFieldsImport}${compressionImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({
