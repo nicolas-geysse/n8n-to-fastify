@@ -79,7 +79,7 @@ const compile = program
     fs.writeFileSync(path.join(outDir, 'server.ts'), RouteGenerator.generateServerEntry(), 'utf8');
     fs.writeFileSync(
       path.join(outDir, 'package.json'),
-      RouteGenerator.generateOutputPackageJson(),
+      RouteGenerator.generateOutputPackageJson(workflows),
       'utf8'
     );
 

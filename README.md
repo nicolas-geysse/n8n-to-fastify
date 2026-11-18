@@ -97,8 +97,24 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 | **Split Out** | Expands nested arrays into individual `N8nItem[]` items |
 | **Merge** | Combines or appends parallel execution branches |
 | **PostgreSQL** | Parameterized SQL execution via `DATABASE_URL` |
+| **S3** | Downloads files into binary items from an S3-compatible endpoint |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | Non-blocking async `setTimeout` promise |
+
+---
+
+## S3 downloads
+
+The compiler supports File / Download from S3 node v1 in n8n 1.123.5.
+The generated service reads `S3_ENDPOINT`, `AWS_ACCESS_KEY_ID`,
+and `AWS_SECRET_ACCESS_KEY` at runtime. It also accepts `AWS_REGION`
+(defaults to `us-east-1`) and `AWS_SESSION_TOKEN`. Path-style addressing
+is enabled by default. Set `S3_FORCE_PATH_STYLE=false` for virtual-hosted
+addressing.
+
+The service downloads each object in order and stores its bytes as
+base64 under the configured binary field, `data` by default. The input
+JSON and other binary fields are preserved.
 
 ---
 
