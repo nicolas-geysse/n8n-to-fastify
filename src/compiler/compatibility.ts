@@ -6,6 +6,7 @@ import { getMultipartIssue, usesMultipartBody } from './mappers/http-request';
 import { getRabbitMqPublisherIssue, rabbitMqPublisherType } from './mappers/rabbitmq';
 import { parseRabbitMqTrigger, rabbitMqTriggerType } from './rabbitmq-trigger';
 import { convertToFileType, getConvertToFileIssue } from './mappers/convert-to-file';
+import { getRawEditFieldsIssue } from './mappers/raw-edit-fields';
 
 const supportedNodeTypes = new Set([
   convertToFileType,
@@ -95,9 +96,8 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
         report(node.name, 'configured HTTP Request authentication is ignored');
       }
     }
-    if (node.type === 'n8n-nodes-base.set' && params.mode === 'raw') {
-      report(node.name, 'raw JSON mode is ignored');
-    }
+    const rawIssue = getRawEditFieldsIssue(node);
+    if (rawIssue) report(node.name, rawIssue);
     if (isPositionMerge(node)) {
       const issue = getPositionMergeIssue(node);
       if (issue) report(node.name, issue);

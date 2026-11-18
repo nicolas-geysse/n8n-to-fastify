@@ -48,7 +48,7 @@ test('strict compile reports known incompatibilities before writing output', () 
     expect(diagnostics).toContain('only JSON and multipart request bodies are supported');
     expect(diagnostics).toContain('the configured onError behavior is ignored');
     expect(diagnostics).toContain('node "Legacy Code": legacy continueOnFail is ignored');
-    expect(diagnostics).toContain('raw JSON mode is ignored');
+    expect(diagnostics).toContain('Edit Fields JSON Output requires node version 3.4');
     expect(diagnostics).toContain('combine mode reads at most two inputs');
     expect(diagnostics).not.toContain('node "Note"');
     expect(fs.existsSync(output)).toBe(false);

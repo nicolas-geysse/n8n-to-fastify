@@ -6,6 +6,7 @@ import { mapS3Download, s3NodeType } from './s3';
 import { generateMultipartBody, getMultipartIssue, usesJsonHeaders, usesMultipartBody } from './http-request';
 import { mapRabbitMqPublisher, rabbitMqPublisherType } from './rabbitmq';
 import { convertToFileType, mapConvertToFile } from './convert-to-file';
+import { getRawEditFieldsIssue, isRawEditFields, mapRawEditFields } from './raw-edit-fields';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -62,6 +63,7 @@ export class NodeMappers {
     }
 
     if (type.includes('set')) {
+      if (isRawEditFields(ctx.node) && !getRawEditFieldsIssue(ctx.node)) return mapRawEditFields(ctx);
       return this.mapSetNode(ctx);
     }
 

@@ -103,7 +103,7 @@ out of version control.
 | **IF** | Routes each item to its true or false output |
 | **Filter** | Deterministic branch tracking |
 | **Switch** | Routes each item by rule or output-index expression, with configurable fallback in rules mode |
-| **Set / Edit Fields** | Field assignments with dot notation and version-specific binary preservation |
+| **Set / Edit Fields** | Manual assignments and v3.4 JSON Output with expressions and binary preservation |
 | **HTTP Request** | Native `fetch()` with JSON headers and JSON or multipart form bodies |
 | **Aggregate** | In-memory item aggregation |
 | **Split Out** | Expands nested arrays into individual `N8nItem[]` items |
