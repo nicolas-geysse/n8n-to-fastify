@@ -110,12 +110,16 @@
       const incomingMap = new Map;
       nodes.forEach((n) => incomingMap.set(n.name, []));
       Object.entries(connections).forEach(([sourceNodeName, outputs]) => {
-        if (outputs.main && Array.isArray(outputs.main)) {
+        if (outputs && Array.isArray(outputs.main)) {
           outputs.main.forEach((outputTargets, outputIndex) => {
             if (Array.isArray(outputTargets)) {
               outputTargets.forEach((target) => {
                 if (target && target.node && incomingMap.has(target.node)) {
-                  incomingMap.get(target.node)?.push({ sourceNode: sourceNodeName, outputIndex });
+                  incomingMap.get(target.node)?.push({
+                    sourceNode: sourceNodeName,
+                    outputIndex,
+                    inputIndex: target.index ?? 0
+                  });
                 }
               });
             }
@@ -294,6 +298,46 @@
     }
   }
 
+  // src/compiler/mappers/position-merge.ts
+  function isPositionMerge(node) {
+    return node.type === "n8n-nodes-base.merge" && node.parameters?.mode === "combine" && node.parameters?.combineBy === "combineByPosition";
+  }
+  function getPositionMergeIssue(node) {
+    const portCount = node.parameters.numberInputs ?? 2;
+    if (!Number.isInteger(portCount) || portCount < 2 || portCount > 10) {
+      return "position Merge requires 2 to 10 input ports";
+    }
+    for (const { inputIndex = 0 } of node.incomingConnections ?? []) {
+      if (!Number.isInteger(inputIndex) || inputIndex < 0 || inputIndex >= portCount) {
+        return "position Merge has an invalid input port";
+      }
+    }
+  }
+  function mapPositionMerge(ctx) {
+    const issue = getPositionMergeIssue(ctx.node);
+    if (issue)
+      throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
+    const params = ctx.node.parameters;
+    const portCount = params.numberInputs ?? 2;
+    const sources = Array.from({ length: portCount }, () => []);
+    for (const { sourceNode, outputIndex, inputIndex = 0 } of ctx.node.incomingConnections ?? []) {
+      sources[inputIndex].push(`ctx.getNodeOutput(${JSON.stringify(sourceNode)}, ${outputIndex}) || []`);
+    }
+    const inputs = sources.map((port) => `[${port.join(", ")}].flat()`);
+    const options = params.options ?? {};
+    const includeUnpaired = ExpressionParser.parse(options.includeUnpaired ?? false);
+    return `
+    {
+      const inputs: N8nItem[][] = [${inputs.join(", ")}];
+      const merged = ((item: N8nItem) => mergeByPosition(
+        inputs, Boolean(${includeUnpaired}), ${JSON.stringify(options.clashHandling?.values ?? {})},
+      ))(inputs[0][0] || { json: {} });
+      ${ctx.variableName} = merged;
+      item = merged[0] || { json: {} };
+      ctx.setNodeOutputs(${JSON.stringify(ctx.node.name)}, [[0, merged]], merged);
+    }`;
+  }
+
   // src/compiler/mappers/rabbitmq.ts
   var rabbitMqPublisherType = "n8n-nodes-base.rabbitmq";
   function getRabbitMqPublisherIssue(node) {
@@ -375,7 +419,7 @@
         return this.mapSplitOutNode(ctx);
       }
       if (type.includes("merge")) {
-        return this.mapMergeNode(ctx);
+        return isPositionMerge(ctx.node) ? mapPositionMerge(ctx) : this.mapMergeNode(ctx);
       }
       if (type.includes("postgres")) {
         return this.mapPostgresNode(ctx);
@@ -846,12 +890,14 @@
       const functionName = `workflow_${this.sanitizeIdentifier(wf.fileName)}`;
       const depth = (wf.relativePath.match(/\//g) || []).length;
       const runtimePrefix = "../".repeat(depth + 1) + "runtime";
+      const positionMergeImport = wf.nodes.some(isPositionMerge) ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';
+` : "";
       const rabbitMqImport = wf.nodes.some((node) => node.type === rabbitMqPublisherType) ? `import { publishRabbitMq } from '${runtimePrefix}/rabbitmq';
 ` : "";
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${rabbitMqImport}
+${positionMergeImport}${rabbitMqImport}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),

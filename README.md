@@ -104,7 +104,7 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 | **HTTP Request** | Native `fetch()` with headers, JSON body, and error handling |
 | **Aggregate** | In-memory item aggregation |
 | **Split Out** | Expands nested arrays into individual `N8nItem[]` items |
-| **Merge** | Combines or appends parallel execution branches |
+| **Merge** | Appends branches or combines items by position across up to ten destination ports |
 | **PostgreSQL** | Parameterized SQL execution via `DATABASE_URL` |
 | **RabbitMQ** | Publish messages to an existing exchange (`RABBITMQ_URL`) |
 | **RabbitMQ Trigger** | Consume a queue and acknowledge delivery after successful execution |

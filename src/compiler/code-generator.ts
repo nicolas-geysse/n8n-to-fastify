@@ -1,5 +1,6 @@
 import { N8nNode, ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
+import { isPositionMerge } from './mappers/position-merge';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
 import { rabbitMqTriggerType } from './rabbitmq-trigger';
 
@@ -18,6 +19,9 @@ export class CodeGenerator {
     const functionName = `workflow_${this.sanitizeIdentifier(wf.fileName)}`;
     const depth = (wf.relativePath.match(/\//g) || []).length;
     const runtimePrefix = '../'.repeat(depth + 1) + 'runtime';
+    const positionMergeImport = wf.nodes.some(isPositionMerge)
+      ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';\n`
+      : '';
     const rabbitMqImport = wf.nodes.some((node) => node.type === rabbitMqPublisherType)
       ? `import { publishRabbitMq } from '${runtimePrefix}/rabbitmq';\n`
       : '';
@@ -25,7 +29,7 @@ export class CodeGenerator {
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${rabbitMqImport}
+${positionMergeImport}${rabbitMqImport}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),
