@@ -61,8 +61,9 @@
     if (typeof options !== "object" || Array.isArray(options)) {
       return "RabbitMQ Trigger needs static options";
     }
-    if (options.acknowledge !== "executionFinishesSuccessfully") {
-      return "RabbitMQ Trigger needs the executionFinishesSuccessfully acknowledgement mode";
+    const acknowledge = options.acknowledge ?? "immediately";
+    if (acknowledge !== "immediately" && acknowledge !== "executionFinishes" && acknowledge !== "executionFinishesSuccessfully") {
+      return "RabbitMQ Trigger supports immediately, executionFinishes, and executionFinishesSuccessfully acknowledgement";
     }
     if (options.contentIsBinary || options.onlyContent) {
       return "RabbitMQ Trigger supports text or parsed JSON in the message envelope";
@@ -86,6 +87,7 @@
     return {
       queue,
       bindings: bindings.map(({ exchange, routingKey }) => ({ exchange, routingKey })),
+      acknowledge: acknowledge === "immediately" && prefetch !== -1 ? "executionFinishes" : acknowledge,
       prefetch: prefetch === -1 ? undefined : prefetch,
       parseJson: options.jsonParseBody === true,
       declareQueue: options.assertQueue ? {
