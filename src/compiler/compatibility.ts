@@ -1,5 +1,6 @@
 import type { ParsedWorkflow } from './core-parser';
 import { getPositionMergeIssue, isPositionMerge } from './mappers/position-merge';
+import { getLegacyNodeReferenceIssue } from './mappers/code-context';
 import { getRabbitMqPublisherIssue, rabbitMqPublisherType } from './mappers/rabbitmq';
 import { getS3DownloadIssue, s3NodeType } from './mappers/s3';
 import { getMultipartIssue, usesMultipartBody } from './mappers/http-request';
@@ -71,6 +72,8 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     }
 
     const params = node.parameters ?? {};
+    const codeIssue = getLegacyNodeReferenceIssue(node);
+    if (codeIssue) report(node.name, codeIssue);
     if (node.type === s3NodeType) {
       const issue = getS3DownloadIssue(node);
       if (issue) report(node.name, issue);

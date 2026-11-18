@@ -1,6 +1,7 @@
 import { N8nNode } from '../parser';
 import { ExpressionParser } from '../expression-parser';
 import { isPositionMerge, mapPositionMerge } from './position-merge';
+import { getLegacyNodeReferenceIssue } from './code-context';
 import { mapRabbitMqPublisher, rabbitMqPublisherType } from './rabbitmq';
 import { mapS3Download, s3NodeType } from './s3';
 import { generateMultipartBody, getMultipartIssue, usesJsonHeaders, usesMultipartBody } from './http-request';
@@ -10,6 +11,7 @@ export interface NodeMapperContext {
   workflowName: string;
   variableName: string;
   previousVariableName?: string;
+  legacyNodePorts?: Array<[string, number]>;
 }
 
 /**
@@ -119,9 +121,15 @@ export class NodeMappers {
   }
 
   private static mapCodeNode(ctx: NodeMapperContext): string {
+    const issue = getLegacyNodeReferenceIssue(ctx.node);
+    if (issue) throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
+
     const params = ctx.node.parameters || {};
     const rawCode = params.jsCode || params.functionCode || 'return $input.all();';
     const prevVar = ctx.previousVariableName || 'inputItems';
+    const legacyBinding = ctx.legacyNodePorts
+      ? `      const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});\n`
+      : '';
 
     // Rewrite n8n sandbox globals to local runtime bindings
     const transformedCode = rawCode
@@ -138,7 +146,7 @@ export class NodeMappers {
     // [Node: ${ctx.node.name}] Code Execution
     ${ctx.variableName} = await (async () => {
       const currentItems = ${prevVar} || inputItems;
-      const result = await (async () => {
+${legacyBinding}      const result = await (async () => {
         ${transformedCode}
       })();
       return n8n.normalizeItems(result);

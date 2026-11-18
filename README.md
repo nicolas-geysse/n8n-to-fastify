@@ -112,6 +112,8 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | Non-blocking async `setTimeout` promise |
 
+> Legacy `$node["Node name"]` references in a `Code` node running once for all items read the first item from the connected output (`.json`, legacy `.data` alias, and `.binary` metadata).
+
 ---
 
 ## 📦 Code Node Dependencies

@@ -1,6 +1,7 @@
 import { N8nNode, ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
 import { isPositionMerge } from './mappers/position-merge';
+import { collectLegacyNodePorts, usesLegacyNodeReferences } from './mappers/code-context';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
 import { s3NodeType } from './mappers/s3';
 import { usesJsonHeaders, usesMultipartBody } from './mappers/http-request';
@@ -24,6 +25,14 @@ export class CodeGenerator {
     const positionMergeImport = wf.nodes.some(isPositionMerge)
       ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';\n`
       : '';
+    const legacyNodes = new Set(wf.nodes.filter(usesLegacyNodeReferences));
+    const legacyImport = legacyNodes.size > 0
+      ? `import { createLegacyNodeReferences } from '${runtimePrefix}/code-context';\n`
+      : '';
+    const legacyNames = legacyNodes.size > 0
+      ? `const legacyNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map(node => node.name))});\n`
+      : '';
+    const nodesByName = new Map(wf.nodes.map(node => [node.name, node]));
     const rabbitMqImport = wf.nodes.some((node) => node.type === rabbitMqPublisherType)
       ? `import { publishRabbitMq } from '${runtimePrefix}/rabbitmq';\n`
       : '';
@@ -37,7 +46,8 @@ export class CodeGenerator {
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${rabbitMqImport}${s3Import}${httpRequestImport}
+${positionMergeImport}${legacyImport}${rabbitMqImport}${s3Import}${httpRequestImport}
+${legacyNames}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),
@@ -96,6 +106,7 @@ const DateTime = {
         workflowName: wf.name,
         variableName: varName,
         previousVariableName: runPerIncomingBatch ? 'incomingItems' : 'inputItems',
+        legacyNodePorts: legacyNodes.has(node) ? collectLegacyNodePorts(node, nodesByName) : undefined,
       });
       if (runPerIncomingBatch) {
         const batches = incoming.map(

@@ -338,6 +338,38 @@
     }`;
   }
 
+  // src/compiler/mappers/code-context.ts
+  function usesLegacyNodeReferences(node) {
+    if (!node.type.includes("code") && !node.type.includes("function"))
+      return false;
+    const code = node.parameters?.jsCode || node.parameters?.functionCode;
+    return typeof code === "string" && /\$node\b/.test(code);
+  }
+  function getLegacyNodeReferenceIssue(node) {
+    if (usesLegacyNodeReferences(node) && node.parameters?.mode === "runOnceForEachItem") {
+      return "Code legacy $node references require Run Once for All Items";
+    }
+  }
+  function collectLegacyNodePorts(node, nodesByName) {
+    const upstream = new Map;
+    const queue = [node];
+    const visited = new Set([node.name]);
+    for (let index = 0;index < queue.length; index++) {
+      const incoming = [...queue[index].incomingConnections ?? []];
+      incoming.sort((a, b) => (a.inputIndex ?? 0) - (b.inputIndex ?? 0));
+      for (const { sourceNode, outputIndex } of incoming) {
+        if (visited.has(sourceNode))
+          continue;
+        visited.add(sourceNode);
+        upstream.set(sourceNode, outputIndex);
+        const source = nodesByName.get(sourceNode);
+        if (source)
+          queue.push(source);
+      }
+    }
+    return [...upstream];
+  }
+
   // src/compiler/mappers/rabbitmq.ts
   var rabbitMqPublisherType = "n8n-nodes-base.rabbitmq";
   function getRabbitMqPublisherIssue(node) {
@@ -534,15 +566,20 @@
     }`;
     }
     static mapCodeNode(ctx) {
+      const issue = getLegacyNodeReferenceIssue(ctx.node);
+      if (issue)
+        throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
       const params = ctx.node.parameters || {};
       const rawCode = params.jsCode || params.functionCode || "return $input.all();";
       const prevVar = ctx.previousVariableName || "inputItems";
+      const legacyBinding = ctx.legacyNodePorts ? `      const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});
+` : "";
       const transformedCode = rawCode.replace(/\$input\.all\(\)/g, "currentItems").replace(/\$input\.first\(\)/g, "(currentItems[0] || { json: {} })").replace(/\$input\.item/g, "(currentItems[0] || { json: {} })").replace(/\$json/g, "(currentItems[0]?.json || {})").replace(/\$\(['"](.*?)['"]\)\.first\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.first() || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.item/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.item || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.all\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.all() || [])`).replace(/\$now/g, "DateTime.now()");
       return `
     // [Node: ${ctx.node.name}] Code Execution
     ${ctx.variableName} = await (async () => {
       const currentItems = ${prevVar} || inputItems;
-      const result = await (async () => {
+${legacyBinding}      const result = await (async () => {
         ${transformedCode}
       })();
       return n8n.normalizeItems(result);
@@ -986,6 +1023,12 @@
       const runtimePrefix = "../".repeat(depth + 1) + "runtime";
       const positionMergeImport = wf.nodes.some(isPositionMerge) ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';
 ` : "";
+      const legacyNodes = new Set(wf.nodes.filter(usesLegacyNodeReferences));
+      const legacyImport = legacyNodes.size > 0 ? `import { createLegacyNodeReferences } from '${runtimePrefix}/code-context';
+` : "";
+      const legacyNames = legacyNodes.size > 0 ? `const legacyNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map((node) => node.name))});
+` : "";
+      const nodesByName = new Map(wf.nodes.map((node) => [node.name, node]));
       const rabbitMqImport = wf.nodes.some((node) => node.type === rabbitMqPublisherType) ? `import { publishRabbitMq } from '${runtimePrefix}/rabbitmq';
 ` : "";
       const s3Import = wf.nodes.some((node) => node.type === s3NodeType) ? `import { downloadS3Files } from '${runtimePrefix}/s3';
@@ -995,7 +1038,8 @@
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${rabbitMqImport}${s3Import}${httpRequestImport}
+${positionMergeImport}${legacyImport}${rabbitMqImport}${s3Import}${httpRequestImport}
+${legacyNames}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),
@@ -1049,7 +1093,8 @@ ctx.setNodeOutput(${nodeName}, inputItems);`;
           node,
           workflowName: wf.name,
           variableName: varName,
-          previousVariableName: runPerIncomingBatch ? "incomingItems" : "inputItems"
+          previousVariableName: runPerIncomingBatch ? "incomingItems" : "inputItems",
+          legacyNodePorts: legacyNodes.has(node) ? collectLegacyNodePorts(node, nodesByName) : undefined
         });
         if (runPerIncomingBatch) {
           const batches = incoming.map((conn) => `ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`);
