@@ -231,7 +231,10 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       for (const a of params.assignments.assignments) {
         if (a.name) {
           const valExpr = ExpressionParser.parse(a.value);
-          assignments.push(`n8n.setNestedProperty(newJson, ${JSON.stringify(a.name)}, ${valExpr});`);
+          const value = version >= 3.2 && a.type === 'number'
+            ? `n8n.coerceNumberField(${valExpr}, Boolean(${ExpressionParser.parse(options.ignoreConversionErrors ?? false)}))`
+            : valExpr;
+          assignments.push(`n8n.setNestedProperty(newJson, ${JSON.stringify(a.name)}, ${value});`);
         }
       }
     }
