@@ -198,12 +198,13 @@ export class NodeMappers {
 
   private static parseConditions(group: any, legacyFilter = false): string {
     const conditions: string[] = [];
+    const firstInputItem = legacyFilter ? undefined : 'firstInputItem';
 
     // n8n v2 conditions structure
     if (Array.isArray(group?.conditions)) {
       for (const cond of group.conditions) {
-        let left = ExpressionParser.parse(cond.leftValue);
-        let right = ExpressionParser.parse(cond.rightValue);
+        let left = ExpressionParser.parse(cond.leftValue, firstInputItem);
+        let right = ExpressionParser.parse(cond.rightValue, firstInputItem);
         const op = cond.operator?.operation || 'equals';
         if (legacyFilter && ['true', 'false', 'gte', 'lte'].includes(op)) {
           conditions.push(`Boolean(${left})`);
@@ -288,6 +289,7 @@ export class NodeMappers {
     // [Node: ${ctx.node.name}] Conditional Branch (IF)
     ${ctx.variableName} = ${prevVar} || inputItems;
     {
+      const firstInputItem: N8nItem | undefined = ${ctx.variableName}[0];
       const outputs: N8nItem[][] = [[], []];
       for (const item of ${ctx.variableName} as N8nItem[]) {
         const port = (${conditionExpr}) ? 0 : 1;
@@ -305,8 +307,8 @@ export class NodeMappers {
     const options = params.options ?? {};
     const fallback = options.fallbackOutput ?? 'none';
     const fallbackPort = fallback === 'extra' ? rules.length : fallback;
-    const hasFallback = rules.length > 0 && Number.isInteger(fallbackPort) && fallbackPort >= 0 &&
-      (fallback === 'extra' || fallbackPort < rules.length);
+    const hasFallback = fallback === 'extra' ||
+      (Number.isInteger(fallbackPort) && fallbackPort >= 0 && fallbackPort < rules.length);
     const fallbackCode = hasFallback
       ? `
         if (!matched) {
@@ -324,7 +326,7 @@ export class NodeMappers {
           if (matches(item)) {
             send(item, port);
             matched = true;
-            if (!(${ExpressionParser.parse(options.allMatchingOutputs ?? false)})) break;
+            if (!(${ExpressionParser.parse(options.allMatchingOutputs ?? false, 'firstInputItem')})) break;
           }
         }
         ${fallbackCode}
@@ -332,10 +334,10 @@ export class NodeMappers {
       }`;
     const matchExpression = `
       const numberOutputs = source.length > 0
-        ? ((item: N8nItem) => (${ExpressionParser.parse(params.numberOutputs ?? 4)}))(source[0])
+        ? ((item: N8nItem) => (${ExpressionParser.parse(params.numberOutputs ?? 4, 'firstInputItem')}))(source[0])
         : 0;
       for (const item of source) {
-        const port = ${ExpressionParser.parse(params.output ?? 0)};
+        const port = ${ExpressionParser.parse(params.output ?? 0, 'firstInputItem')};
         if (!Number.isSafeInteger(numberOutputs) || !Number.isSafeInteger(port) || port < 0 || port >= numberOutputs) {
           throw new Error('Switch expression returned an invalid output index');
         }
@@ -348,6 +350,7 @@ export class NodeMappers {
     // [Node: ${ctx.node.name}] Switch Router
     {
       const source: N8nItem[] = ${prevVar} || inputItems;
+      const firstInputItem = source[0];
       const outputs = new Map<number, N8nItem[]>();
       const routed: N8nItem[] = [];
       const send = (item: N8nItem, port: number) => {

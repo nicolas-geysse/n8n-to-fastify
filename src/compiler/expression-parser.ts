@@ -4,7 +4,7 @@
  * into safe native JavaScript/TypeScript with deep optional chaining (?.).
  */
 export class ExpressionParser {
-  static parse(expression: any): string {
+  static parse(expression: any, firstInputItem?: string): string {
     if (expression === undefined || expression === null) {
       return JSON.stringify('');
     }
@@ -24,7 +24,7 @@ export class ExpressionParser {
       if (innerContent.startsWith('{{') && innerContent.endsWith('}}')) {
         const between = innerContent.substring(2, innerContent.length - 2).trim();
         if (!between.includes('{{') && !between.includes('}}')) {
-          const transformed = this.transformTokens(between);
+          const transformed = this.transformTokens(between, firstInputItem);
           return `(${transformed})`;
         }
       }
@@ -35,7 +35,7 @@ export class ExpressionParser {
     let placeholderIdx = 0;
 
     const tokenized = expr.replace(/\{\{(.*?)\}\}/g, (_, inner) => {
-      const transformed = this.transformTokens(inner.trim());
+      const transformed = this.transformTokens(inner.trim(), firstInputItem);
       const placeholder = `__EXPR_PLACEHOLDER_${placeholderIdx++}__`;
       replacements.push(`\${(${transformed}) ?? ''}`);
       return placeholder;
@@ -50,7 +50,7 @@ export class ExpressionParser {
     return `\`${safeLiteral}\``;
   }
 
-  private static transformTokens(code: string): string {
+  private static transformTokens(code: string, firstInputItem?: string): string {
     let result = code;
 
     result = result.replace(/\$now\b/g, 'new Date().toISOString()');
@@ -82,7 +82,8 @@ export class ExpressionParser {
       return `item?.json?.${parts.join('?.')}`;
     });
 
-    result = result.replace(/\$input\.first\(\)\.json/g, 'item?.json');
+    result = result.replace(/\$input\.first\(\)\.json/g, `${firstInputItem ?? 'item'}?.json`);
+    if (firstInputItem) result = result.replace(/\$input\.first\(\)/g, firstInputItem);
     result = result.replace(/\$input\.item\.json/g, 'item?.json');
     result = result.replace(/\$input\.all\(\)/g, 'inputItems');
 
