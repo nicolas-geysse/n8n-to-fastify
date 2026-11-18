@@ -201,7 +201,7 @@ const DateTime = {
   ${j.trim().replace(/\n/g,`
   `)}
   }
-`}else a+=j;p=m.name});let d=e.orderedNodes[e.orderedNodes.length-1]?.name,u=d?`(ctx.getNode(${JSON.stringify(d)})?.all() || [{ json: item.json }])`:"inputItems",y=Array.from(new Set([e.id,e.name,e.fileName])).filter(Boolean);return`${o}
+`}else a+=j;p=m.name});let d=e.orderedNodes.filter((m)=>m.type!==S||m.disabled).at(-1)?.name,u=d?`(ctx.getNode(${JSON.stringify(d)})?.all() || [{ json: item.json }])`:"inputItems",y=Array.from(new Set([e.id,e.name,e.fileName])).filter(Boolean);return`${o}
 export async function ${t}(
   inputItems: N8nItem[] = [{ json: {} }],
   parentCtx?: WorkflowContext

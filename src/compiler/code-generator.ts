@@ -109,7 +109,7 @@ const DateTime = {
       prevVarName = node.name;
     });
 
-    const lastNodeName = wf.orderedNodes[wf.orderedNodes.length - 1]?.name;
+    const lastNodeName = wf.orderedNodes.filter(node => node.type !== stopAndErrorType || node.disabled).at(-1)?.name;
     const returnItemsExpr = lastNodeName
       ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])`
       : `inputItems`;
