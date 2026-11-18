@@ -151,6 +151,7 @@ export async function ${functionName}(
   entryNode?: string
 ): Promise<{ items: N8nItem[]; context: WorkflowContext }> {
   const ctx = parentCtx || new WorkflowContext();
+  const $env = process.env;
 ${declCode}
 ${bodyCode}
   const finalItems = ${returnItemsExpr};
