@@ -1,63 +1,489 @@
-(()=>{var{defineProperty:S,getOwnPropertyNames:b,getOwnPropertyDescriptor:v}=Object,y=Object.prototype.hasOwnProperty;function N(z){return this[z]}var w=(z)=>{var H=(k??=new WeakMap).get(z),U;if(H)return H;if(H=S({},"__esModule",{value:!0}),z&&typeof z==="object"||typeof z==="function"){for(var Q of b(z))if(!y.call(H,Q))S(H,Q,{get:N.bind(z,Q),enumerable:!(U=v(z,Q))||U.enumerable})}return k.set(z,H),H},k;var h=(z)=>z;function g(z,H){this[z]=h.bind(null,H)}var f=(z,H)=>{for(var U in H)S(z,U,{get:H[U],enumerable:!0,configurable:!0,set:g.bind(H,U)})};var l={};f(l,{compileWorkflowJson:()=>P});class V{static parseWorkflow(z,H,U){if(!z||!Array.isArray(z.nodes))return null;let Q=z.id||H,J=z.name||H,X=z.nodes||[],Z=z.connections||{},B=U||`${H}.json`,A=new Map;X.forEach((F)=>A.set(F.name,[])),Object.entries(Z).forEach(([F,R])=>{if(R.main&&Array.isArray(R.main))R.main.forEach(($,q)=>{if(Array.isArray($))$.forEach((O)=>{if(O&&O.node&&A.has(O.node))A.get(O.node)?.push({sourceNode:F,outputIndex:q})})})}),X.forEach((F)=>{F.incomingConnections=A.get(F.name)||[]});let K=X.filter((F)=>F.type.includes("webhook")||F.type.includes("trigger")||F.type.includes("cron")),_=new Set(K.map((F)=>F.name));X.forEach((F)=>{let R=new Set,$=new Set,q=[...(A.get(F.name)||[]).map((O)=>O.sourceNode)];while(q.length>0){let O=q.shift();if($.has(O))continue;if($.add(O),_.has(O))R.add(O);(A.get(O)||[]).forEach((I)=>q.push(I.sourceNode))}F.ancestorTriggers=Array.from(R)});let Y=this.topologicalSort(X,Z);return{id:Q,name:J,fileName:H,relativePath:B.replace(/\.json$/,".ts"),nodes:X,connections:Z,orderedNodes:Y,triggers:K}}static topologicalSort(z,H){let U=new Map,Q=new Map;z.forEach((_)=>{U.set(_.name,_),Q.set(_.name,[])}),Object.entries(H).forEach(([_,Y])=>{if(Y.main&&Array.isArray(Y.main))Y.main.forEach((F)=>{if(Array.isArray(F))F.forEach((R)=>{if(R&&R.node&&U.has(R.node))Q.get(_)?.push(R.node)})})});let J=new Set,X=new Set,Z=[],B=(_,Y=[])=>{if(J.has(_))return;if(X.has(_)){let $=[...Y,_].join(" -> ");throw Error(`[n8n-to-fastify] Cyclic dependency detected in workflow DAG: (${$}). Transpiled workflows must be strict Directed Acyclic Graphs.`)}X.add(_),Y.push(_);let F=Q.get(_)||[];for(let $ of F)B($,Y);Y.pop(),X.delete(_),J.add(_);let R=U.get(_);if(R)Z.push(R)},A=new Map;z.forEach((_)=>A.set(_.name,0));for(let _ of Q.values())for(let Y of _)A.set(Y,(A.get(Y)||0)+1);let K=z.map((_)=>_.name).filter((_)=>A.get(_)===0);for(let _ of K)B(_);for(let _ of z)if(!J.has(_.name))B(_.name);return Z.reverse()}}class W{static parse(z){if(z===void 0||z===null)return JSON.stringify("");if(typeof z!=="string")return JSON.stringify(z);let H=z.trim();if(!H.includes("{{"))return JSON.stringify(z);if(H.startsWith("=")){let Z=H.substring(1).trim();if(Z.startsWith("{{")&&Z.endsWith("}}")){let B=Z.substring(2,Z.length-2).trim();if(!B.includes("{{")&&!B.includes("}}"))return`(${this.transformTokens(B)})`}H=H.substring(1).trim()}let U=[],Q=0,X=H.replace(/\{\{(.*?)\}\}/g,(Z,B)=>{let A=this.transformTokens(B.trim()),K=`__EXPR_PLACEHOLDER_${Q++}__`;return U.push(`\${(${A}) ?? ''}`),K}).replace(/`/g,"\\`").replace(/\${/g,"\\${");return U.forEach((Z,B)=>{X=X.replace(`__EXPR_PLACEHOLDER_${B}__`,Z)}),`\`${X}\``}static transformTokens(z){let H=z;return H=H.replace(/\$now\b/g,"new Date().toISOString()"),H=H.replace(/\$today\b/g,'new Date().toISOString().split("T")[0]'),H=H.replace(/\$\(['"](.*?)['"]\)\.item\.json([a-zA-Z0-9_.]*)/g,(U,Q,J)=>{let X=J?J.split(".").filter(Boolean):[];return`(ctx.getNode(${JSON.stringify(Q)})?.item?.json${X.length?"?."+X.join("?."):""})`}),H=H.replace(/\$\(['"](.*?)['"]\)\.first\(\)\.json([a-zA-Z0-9_.]*)/g,(U,Q,J)=>{let X=J?J.split(".").filter(Boolean):[];return`(ctx.getNode(${JSON.stringify(Q)})?.first()?.json${X.length?"?."+X.join("?."):""})`}),H=H.replace(/\$\(['"](.*?)['"]\)/g,(U,Q)=>{return`ctx.getNode(${JSON.stringify(Q)})`}),H=H.replace(/\$node\(['"](.*?)['"]\)/g,(U,Q)=>{return`ctx.getNode(${JSON.stringify(Q)})`}),H=H.replace(/\$json([a-zA-Z0-9_.]*)/g,(U,Q)=>{if(!Q)return"item?.json";return`item?.json?.${Q.split(".").filter(Boolean).join("?.")}`}),H=H.replace(/\$input\.first\(\)\.json/g,"item?.json"),H=H.replace(/\$input\.item\.json/g,"item?.json"),H=H.replace(/\$input\.all\(\)/g,"inputItems"),H=H.replace(/\$env\.([a-zA-Z0-9_]+)/g,(U,Q)=>{return`process.env.${Q}`}),H}}class M{static mapNode(z){let H=z.node.type;if(H.includes("respondToWebhook"))return this.mapRespondToWebhookNode(z);if(H.includes("code")||H.includes("function"))return this.mapCodeNode(z);if(H.includes("executeWorkflowTrigger"))return this.mapGenericNode(z,"Subworkflow Entry Trigger");if(H.includes("executeWorkflow"))return this.mapSubworkflowNode(z);if(H.includes("if")||H.includes("filter"))return this.mapIfNode(z);if(H.includes("switch"))return this.mapSwitchNode(z);if(H.includes("set"))return this.mapSetNode(z);if(H.includes("httpRequest"))return this.mapHttpRequestNode(z);if(H.includes("aggregate")||H.includes("itemLists"))return this.mapAggregateNode(z);if(H.includes("splitOut"))return this.mapSplitOutNode(z);if(H.includes("merge"))return this.mapMergeNode(z);if(H.includes("postgres"))return this.mapPostgresNode(z);if(H.includes("openAi")||H.includes("googleGemini")||H.includes("chainLlm"))return this.mapLlmNode(z);if(H.includes("wait"))return this.mapWaitNode(z);return this.mapGenericNode(z,`Unmapped Node (${H})`)}static mapRespondToWebhookNode(z){let H=z.node.parameters||{},U=H.respondWith||"firstIncomingItem",Q=H.options?.responseCode||200,J=z.previousVariableName||"inputItems",X="item?.json || {}";if(U==="allIncomingItems")X=`${z.variableName}.map((i: any) => i.json)`;else if(U==="json"&&H.responseBody)X=W.parse(H.responseBody);else if(U==="text"&&H.responseBody)X=W.parse(H.responseBody);return`
-    // [Node: ${z.node.name}] Respond to Webhook
-    ${z.variableName} = ${J} || inputItems;
-    item = ${z.variableName}[0] || { json: {} };
+(() => {
+  var __defProp = Object.defineProperty;
+  var __getOwnPropNames = Object.getOwnPropertyNames;
+  var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+  var __hasOwnProp = Object.prototype.hasOwnProperty;
+  function __accessProp(key) {
+    return this[key];
+  }
+  var __toCommonJS = (from) => {
+    var entry = (__moduleCache ??= new WeakMap).get(from), desc;
+    if (entry)
+      return entry;
+    entry = __defProp({}, "__esModule", { value: true });
+    if (from && typeof from === "object" || typeof from === "function") {
+      for (var key of __getOwnPropNames(from))
+        if (!__hasOwnProp.call(entry, key))
+          __defProp(entry, key, {
+            get: __accessProp.bind(from, key),
+            enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable
+          });
+    }
+    __moduleCache.set(from, entry);
+    return entry;
+  };
+  var __moduleCache;
+  var __returnValue = (v) => v;
+  function __exportSetter(name, newValue) {
+    this[name] = __returnValue.bind(null, newValue);
+  }
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, {
+        get: all[name],
+        enumerable: true,
+        configurable: true,
+        set: __exportSetter.bind(all, name)
+      });
+  };
+
+  // src/browser.ts
+  var exports_browser = {};
+  __export(exports_browser, {
+    compileWorkflowJson: () => compileWorkflowJson
+  });
+
+  // src/compiler/core-parser.ts
+  class CoreWorkflowParser {
+    static parseWorkflow(json, fallbackName, relativePath) {
+      if (!json || !Array.isArray(json.nodes)) {
+        return null;
+      }
+      const id = json.id || fallbackName;
+      const name = json.name || fallbackName;
+      const nodes = json.nodes || [];
+      const connections = json.connections || {};
+      const relPath = relativePath || `${fallbackName}.json`;
+      const incomingMap = new Map;
+      nodes.forEach((n) => incomingMap.set(n.name, []));
+      Object.entries(connections).forEach(([sourceNodeName, outputs]) => {
+        if (outputs.main && Array.isArray(outputs.main)) {
+          outputs.main.forEach((outputTargets, outputIndex) => {
+            if (Array.isArray(outputTargets)) {
+              outputTargets.forEach((target) => {
+                if (target && target.node && incomingMap.has(target.node)) {
+                  incomingMap.get(target.node)?.push({ sourceNode: sourceNodeName, outputIndex });
+                }
+              });
+            }
+          });
+        }
+      });
+      nodes.forEach((node) => {
+        node.incomingConnections = incomingMap.get(node.name) || [];
+      });
+      const triggers = nodes.filter((node) => node.type.includes("webhook") || node.type.includes("trigger") || node.type.includes("cron"));
+      const triggerNames = new Set(triggers.map((t) => t.name));
+      nodes.forEach((node) => {
+        const ancestorTriggers = new Set;
+        const visited = new Set;
+        const queue = [...(incomingMap.get(node.name) || []).map((c) => c.sourceNode)];
+        while (queue.length > 0) {
+          const curr = queue.shift();
+          if (visited.has(curr))
+            continue;
+          visited.add(curr);
+          if (triggerNames.has(curr)) {
+            ancestorTriggers.add(curr);
+          }
+          const parents = incomingMap.get(curr) || [];
+          parents.forEach((p) => queue.push(p.sourceNode));
+        }
+        node.ancestorTriggers = Array.from(ancestorTriggers);
+      });
+      const orderedNodes = this.topologicalSort(nodes, connections);
+      return {
+        id,
+        name,
+        fileName: fallbackName,
+        relativePath: relPath.replace(/\.json$/, ".ts"),
+        nodes,
+        connections,
+        orderedNodes,
+        triggers
+      };
+    }
+    static topologicalSort(nodes, connections) {
+      const nodeMap = new Map;
+      const adjList = new Map;
+      nodes.forEach((node) => {
+        nodeMap.set(node.name, node);
+        adjList.set(node.name, []);
+      });
+      Object.entries(connections).forEach(([sourceNodeName, outputs]) => {
+        if (outputs.main && Array.isArray(outputs.main)) {
+          outputs.main.forEach((outputTargets) => {
+            if (Array.isArray(outputTargets)) {
+              outputTargets.forEach((target) => {
+                if (target && target.node && nodeMap.has(target.node)) {
+                  adjList.get(sourceNodeName)?.push(target.node);
+                }
+              });
+            }
+          });
+        }
+      });
+      const visited = new Set;
+      const visiting = new Set;
+      const result = [];
+      const dfs = (nodeName, pathStack = []) => {
+        if (visited.has(nodeName))
+          return;
+        if (visiting.has(nodeName)) {
+          const cycle = [...pathStack, nodeName].join(" -> ");
+          throw new Error(`[n8n-to-fastify] Cyclic dependency detected in workflow DAG: (${cycle}). Transpiled workflows must be strict Directed Acyclic Graphs.`);
+        }
+        visiting.add(nodeName);
+        pathStack.push(nodeName);
+        const neighbors = adjList.get(nodeName) || [];
+        for (const neighbor of neighbors) {
+          dfs(neighbor, pathStack);
+        }
+        pathStack.pop();
+        visiting.delete(nodeName);
+        visited.add(nodeName);
+        const node = nodeMap.get(nodeName);
+        if (node) {
+          result.push(node);
+        }
+      };
+      const inDegree = new Map;
+      nodes.forEach((n) => inDegree.set(n.name, 0));
+      for (const neighbors of adjList.values()) {
+        for (const neighbor of neighbors) {
+          inDegree.set(neighbor, (inDegree.get(neighbor) || 0) + 1);
+        }
+      }
+      const roots = nodes.map((n) => n.name).filter((name) => inDegree.get(name) === 0);
+      for (const root of roots) {
+        dfs(root);
+      }
+      for (const node of nodes) {
+        if (!visited.has(node.name)) {
+          dfs(node.name);
+        }
+      }
+      return result.reverse();
+    }
+  }
+
+  // src/compiler/expression-parser.ts
+  class ExpressionParser {
+    static parse(expression) {
+      if (expression === undefined || expression === null) {
+        return JSON.stringify("");
+      }
+      if (typeof expression !== "string") {
+        return JSON.stringify(expression);
+      }
+      let expr = expression.trim();
+      if (!expr.includes("{{")) {
+        return JSON.stringify(expression);
+      }
+      if (expr.startsWith("=")) {
+        const innerContent = expr.substring(1).trim();
+        if (innerContent.startsWith("{{") && innerContent.endsWith("}}")) {
+          const between = innerContent.substring(2, innerContent.length - 2).trim();
+          if (!between.includes("{{") && !between.includes("}}")) {
+            const transformed = this.transformTokens(between);
+            return `(${transformed})`;
+          }
+        }
+        expr = expr.substring(1).trim();
+      }
+      const replacements = [];
+      let placeholderIdx = 0;
+      const tokenized = expr.replace(/\{\{(.*?)\}\}/g, (_, inner) => {
+        const transformed = this.transformTokens(inner.trim());
+        const placeholder = `__EXPR_PLACEHOLDER_${placeholderIdx++}__`;
+        replacements.push(`\${(${transformed}) ?? ''}`);
+        return placeholder;
+      });
+      let safeLiteral = tokenized.replace(/`/g, "\\`").replace(/\${/g, "\\${");
+      replacements.forEach((rep, idx) => {
+        safeLiteral = safeLiteral.replace(`__EXPR_PLACEHOLDER_${idx}__`, rep);
+      });
+      return `\`${safeLiteral}\``;
+    }
+    static transformTokens(code) {
+      let result = code;
+      result = result.replace(/\$now\b/g, "new Date().toISOString()");
+      result = result.replace(/\$today\b/g, 'new Date().toISOString().split("T")[0]');
+      result = result.replace(/\$\(['"](.*?)['"]\)\.item\.json([a-zA-Z0-9_.]*)/g, (_, nodeName, path) => {
+        const parts = path ? path.split(".").filter(Boolean) : [];
+        return `(ctx.getNode(${JSON.stringify(nodeName)})?.item?.json${parts.length ? "?." + parts.join("?.") : ""})`;
+      });
+      result = result.replace(/\$\(['"](.*?)['"]\)\.first\(\)\.json([a-zA-Z0-9_.]*)/g, (_, nodeName, path) => {
+        const parts = path ? path.split(".").filter(Boolean) : [];
+        return `(ctx.getNode(${JSON.stringify(nodeName)})?.first()?.json${parts.length ? "?." + parts.join("?.") : ""})`;
+      });
+      result = result.replace(/\$\(['"](.*?)['"]\)/g, (_, nodeName) => {
+        return `ctx.getNode(${JSON.stringify(nodeName)})`;
+      });
+      result = result.replace(/\$node\(['"](.*?)['"]\)/g, (_, nodeName) => {
+        return `ctx.getNode(${JSON.stringify(nodeName)})`;
+      });
+      result = result.replace(/\$json([a-zA-Z0-9_.]*)/g, (_, path) => {
+        if (!path)
+          return "item?.json";
+        const parts = path.split(".").filter(Boolean);
+        return `item?.json?.${parts.join("?.")}`;
+      });
+      result = result.replace(/\$input\.first\(\)\.json/g, "item?.json");
+      result = result.replace(/\$input\.item\.json/g, "item?.json");
+      result = result.replace(/\$input\.all\(\)/g, "inputItems");
+      result = result.replace(/\$env\.([a-zA-Z0-9_]+)/g, (_, envVar) => {
+        return `process.env.${envVar}`;
+      });
+      return result;
+    }
+  }
+
+  // src/compiler/mappers/index.ts
+  class NodeMappers {
+    static mapNode(ctx) {
+      const type = ctx.node.type;
+      if (type.includes("respondToWebhook")) {
+        return this.mapRespondToWebhookNode(ctx);
+      }
+      if (type.includes("code") || type.includes("function")) {
+        return this.mapCodeNode(ctx);
+      }
+      if (type.includes("executeWorkflowTrigger")) {
+        return this.mapGenericNode(ctx, "Subworkflow Entry Trigger");
+      }
+      if (type.includes("executeWorkflow")) {
+        return this.mapSubworkflowNode(ctx);
+      }
+      if (type.includes("if") || type.includes("filter")) {
+        return this.mapIfNode(ctx);
+      }
+      if (type.includes("switch")) {
+        return this.mapSwitchNode(ctx);
+      }
+      if (type.includes("set")) {
+        return this.mapSetNode(ctx);
+      }
+      if (type.includes("httpRequest")) {
+        return this.mapHttpRequestNode(ctx);
+      }
+      if (type.includes("aggregate") || type.includes("itemLists")) {
+        return this.mapAggregateNode(ctx);
+      }
+      if (type.includes("splitOut")) {
+        return this.mapSplitOutNode(ctx);
+      }
+      if (type.includes("merge")) {
+        return this.mapMergeNode(ctx);
+      }
+      if (type.includes("postgres")) {
+        return this.mapPostgresNode(ctx);
+      }
+      if (type.includes("openAi") || type.includes("googleGemini") || type.includes("chainLlm")) {
+        return this.mapLlmNode(ctx);
+      }
+      if (type.includes("wait")) {
+        return this.mapWaitNode(ctx);
+      }
+      return this.mapGenericNode(ctx, `Unmapped Node (${type})`);
+    }
+    static mapRespondToWebhookNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const respondWith = params.respondWith || "firstIncomingItem";
+      const statusCode = params.options?.responseCode || 200;
+      const prevVar = ctx.previousVariableName || "inputItems";
+      let responseExpr = "item?.json || {}";
+      if (respondWith === "allIncomingItems") {
+        responseExpr = `${ctx.variableName}.map((i: any) => i.json)`;
+      } else if (respondWith === "json" && params.responseBody) {
+        responseExpr = ExpressionParser.parse(params.responseBody);
+      } else if (respondWith === "text" && params.responseBody) {
+        responseExpr = ExpressionParser.parse(params.responseBody);
+      }
+      return `
+    // [Node: ${ctx.node.name}] Respond to Webhook
+    ${ctx.variableName} = ${prevVar} || inputItems;
+    item = ${ctx.variableName}[0] || { json: {} };
     {
-      let payload: any = ${X};
+      let payload: any = ${responseExpr};
       if (typeof payload === 'string' && (payload.trim().startsWith('{') || payload.trim().startsWith('['))) {
         try { payload = JSON.parse(payload); } catch {}
       }
-      ctx.setWebhookResponse(${Q}, payload);
-      ctx.setNodeOutput(${JSON.stringify(z.node.name)}, ${z.variableName});
-    }`}static mapCodeNode(z){let H=z.node.parameters||{},U=H.jsCode||H.functionCode||"return $input.all();",Q=z.previousVariableName||"inputItems",J=U.replace(/\$input\.all\(\)/g,"currentItems").replace(/\$input\.first\(\)/g,"(currentItems[0] || { json: {} })").replace(/\$input\.item/g,"(currentItems[0] || { json: {} })").replace(/\$json/g,"(currentItems[0]?.json || {})").replace(/\$\(['"](.*?)['"]\)\.first\(\)/g,(X,Z)=>`(ctx.getNode(${JSON.stringify(Z)})?.first() || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.item/g,(X,Z)=>`(ctx.getNode(${JSON.stringify(Z)})?.item || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.all\(\)/g,(X,Z)=>`(ctx.getNode(${JSON.stringify(Z)})?.all() || [])`).replace(/\$now/g,"DateTime.now()");return`
-    // [Node: ${z.node.name}] Code Execution
-    ${z.variableName} = await (async () => {
-      const currentItems = ${Q} || inputItems;
+      ctx.setWebhookResponse(${statusCode}, payload);
+      ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});
+    }`;
+    }
+    static mapCodeNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const rawCode = params.jsCode || params.functionCode || "return $input.all();";
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const transformedCode = rawCode.replace(/\$input\.all\(\)/g, "currentItems").replace(/\$input\.first\(\)/g, "(currentItems[0] || { json: {} })").replace(/\$input\.item/g, "(currentItems[0] || { json: {} })").replace(/\$json/g, "(currentItems[0]?.json || {})").replace(/\$\(['"](.*?)['"]\)\.first\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.first() || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.item/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.item || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.all\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.all() || [])`).replace(/\$now/g, "DateTime.now()");
+      return `
+    // [Node: ${ctx.node.name}] Code Execution
+    ${ctx.variableName} = await (async () => {
+      const currentItems = ${prevVar} || inputItems;
       const result = await (async () => {
-        ${J}
+        ${transformedCode}
       })();
       return n8n.normalizeItems(result);
     })();
-    item = ${z.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(z.node.name)}, ${z.variableName});`}static mapSubworkflowNode(z){let H=z.node.parameters||{},U=typeof H.workflowId==="object"?H.workflowId?.value||H.workflowId?.cachedResultName||"":H.workflowId||"",Q=z.previousVariableName||"inputItems";return`
-    // [Node: ${z.node.name}] In-Memory Subworkflow Execution (< 0.05ms)
-    ${z.variableName} = await executeSubworkflow(${JSON.stringify(U)}, ${Q} || inputItems, ctx);
-    item = ${z.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(z.node.name)}, ${z.variableName});`}static mapSetNode(z){let H=z.node.parameters||{},U=z.previousVariableName||"inputItems",Q=H.options?.keepOnlySet===!0||H.include==="none",J=[];if(H.assignments?.assignments&&Array.isArray(H.assignments.assignments)){for(let X of H.assignments.assignments)if(X.name){let Z=W.parse(X.value);J.push(`n8n.setNestedProperty(newJson, ${JSON.stringify(X.name)}, ${Z});`)}}if(H.values)for(let X of["string","number","boolean"]){let Z=H.values[X];if(Array.isArray(Z)){for(let B of Z)if(B.name){let A=W.parse(B.value);J.push(`n8n.setNestedProperty(newJson, ${JSON.stringify(B.name)}, ${A});`)}}}return`
-    // [Node: ${z.node.name}] Set / Edit Fields
-    ${z.variableName} = (${U} || inputItems).map((currentItem: N8nItem) => {
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+    }
+    static mapSubworkflowNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const workflowId = typeof params.workflowId === "object" ? params.workflowId?.value || params.workflowId?.cachedResultName || "" : params.workflowId || "";
+      const prevVar = ctx.previousVariableName || "inputItems";
+      return `
+    // [Node: ${ctx.node.name}] In-Memory Subworkflow Execution (< 0.05ms)
+    ${ctx.variableName} = await executeSubworkflow(${JSON.stringify(workflowId)}, ${prevVar} || inputItems, ctx);
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+    }
+    static mapSetNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const keepOnlySet = params.options?.keepOnlySet === true || params.include === "none";
+      const assignments = [];
+      if (params.assignments?.assignments && Array.isArray(params.assignments.assignments)) {
+        for (const a of params.assignments.assignments) {
+          if (a.name) {
+            const valExpr = ExpressionParser.parse(a.value);
+            assignments.push(`n8n.setNestedProperty(newJson, ${JSON.stringify(a.name)}, ${valExpr});`);
+          }
+        }
+      }
+      if (params.values) {
+        for (const typeKey of ["string", "number", "boolean"]) {
+          const list = params.values[typeKey];
+          if (Array.isArray(list)) {
+            for (const entry of list) {
+              if (entry.name) {
+                const valExpr = ExpressionParser.parse(entry.value);
+                assignments.push(`n8n.setNestedProperty(newJson, ${JSON.stringify(entry.name)}, ${valExpr});`);
+              }
+            }
+          }
+        }
+      }
+      return `
+    // [Node: ${ctx.node.name}] Set / Edit Fields
+    ${ctx.variableName} = (${prevVar} || inputItems).map((currentItem: N8nItem) => {
       const item = currentItem;
-      const newJson: Record<string, any> = ${Q?"{}":"{ ...currentItem.json }"};
-      ${J.join(`
+      const newJson: Record<string, any> = ${keepOnlySet ? "{}" : "{ ...currentItem.json }"};
+      ${assignments.join(`
       `)}
       return { json: newJson };
     });
-    item = ${z.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(z.node.name)}, ${z.variableName});`}static mapIfNode(z){let H=z.node.parameters||{},U=z.previousVariableName||"inputItems",Q=[];if(H.conditions?.conditions&&Array.isArray(H.conditions.conditions))for(let Z of H.conditions.conditions){let B=W.parse(Z.leftValue),A=W.parse(Z.rightValue);switch(Z.operator?.operation||"equals"){case"equals":case"equal":Q.push(`(${B} == ${A})`);break;case"notEquals":case"notEqual":Q.push(`(${B} != ${A})`);break;case"contains":Q.push(`String(${B} ?? '').includes(String(${A} ?? ''))`);break;case"gt":case"larger":Q.push(`(Number(${B}) > Number(${A}))`);break;case"lt":case"smaller":Q.push(`(Number(${B}) < Number(${A}))`);break;case"isEmpty":case"empty":Q.push(`(${B} === undefined || ${B} === null || ${B} === '')`);break;case"isNotEmpty":case"notEmpty":Q.push(`(${B} !== undefined && ${B} !== null && ${B} !== '')`);break;default:Q.push(`Boolean(${B})`)}}let J=H.conditions?.combinator==="or"?" || ":" && ",X=Q.length>0?Q.join(J):"true";return`
-    // [Node: ${z.node.name}] Conditional Branch (IF)
-    ${z.variableName} = ${U} || inputItems;
-    item = ${z.variableName}[0] || { json: {} };
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+    }
+    static mapIfNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const conditions = [];
+      if (params.conditions?.conditions && Array.isArray(params.conditions.conditions)) {
+        for (const cond of params.conditions.conditions) {
+          const left = ExpressionParser.parse(cond.leftValue);
+          const right = ExpressionParser.parse(cond.rightValue);
+          const op = cond.operator?.operation || "equals";
+          switch (op) {
+            case "equals":
+            case "equal":
+              conditions.push(`(${left} == ${right})`);
+              break;
+            case "notEquals":
+            case "notEqual":
+              conditions.push(`(${left} != ${right})`);
+              break;
+            case "contains":
+              conditions.push(`String(${left} ?? '').includes(String(${right} ?? ''))`);
+              break;
+            case "gt":
+            case "larger":
+              conditions.push(`(Number(${left}) > Number(${right}))`);
+              break;
+            case "lt":
+            case "smaller":
+              conditions.push(`(Number(${left}) < Number(${right}))`);
+              break;
+            case "isEmpty":
+            case "empty":
+              conditions.push(`(${left} === undefined || ${left} === null || ${left} === '')`);
+              break;
+            case "isNotEmpty":
+            case "notEmpty":
+              conditions.push(`(${left} !== undefined && ${left} !== null && ${left} !== '')`);
+              break;
+            default:
+              conditions.push(`Boolean(${left})`);
+          }
+        }
+      }
+      const combinator = params.conditions?.combinator === "or" ? " || " : " && ";
+      const conditionExpr = conditions.length > 0 ? conditions.join(combinator) : "true";
+      return `
+    // [Node: ${ctx.node.name}] Conditional Branch (IF)
+    ${ctx.variableName} = ${prevVar} || inputItems;
+    item = ${ctx.variableName}[0] || { json: {} };
     {
-      const isMatch = Boolean(${X});
+      const isMatch = Boolean(${conditionExpr});
       const activeIndex = isMatch ? 0 : 1;
-      ctx.setNodeOutput(${JSON.stringify(z.node.name)}, ${z.variableName}, activeIndex);
-    }`}static mapSwitchNode(z){let H=z.node.parameters||{},U=z.previousVariableName||"inputItems",Q=H.rules?.values||[],J=[];Q.forEach((Z,B)=>{let A=Z.conditions?.conditions?.[0];if(A){let K=W.parse(A.leftValue),_=W.parse(A.rightValue);J.push(`if (${K} == ${_}) { matchedIndex = ${B}; }`)}});let X=Q.length;return`
-    // [Node: ${z.node.name}] Switch Router
-    ${z.variableName} = ${U} || inputItems;
-    item = ${z.variableName}[0] || { json: {} };
+      ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName}, activeIndex);
+    }`;
+    }
+    static mapSwitchNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const rules = params.rules?.values || [];
+      const cases = [];
+      rules.forEach((rule, idx) => {
+        const cond = rule.conditions?.conditions?.[0];
+        if (cond) {
+          const left = ExpressionParser.parse(cond.leftValue);
+          const right = ExpressionParser.parse(cond.rightValue);
+          cases.push(`if (${left} == ${right}) { matchedIndex = ${idx}; }`);
+        }
+      });
+      const fallbackIndex = rules.length;
+      return `
+    // [Node: ${ctx.node.name}] Switch Router
+    ${ctx.variableName} = ${prevVar} || inputItems;
+    item = ${ctx.variableName}[0] || { json: {} };
     {
-      let matchedIndex = ${X};
-      ${J.join(" else ")}
-      ctx.setNodeOutput(${JSON.stringify(z.node.name)}, ${z.variableName}, matchedIndex);
-    }`}static mapHttpRequestNode(z){let H=z.node.parameters||{},U=z.previousVariableName||"inputItems",Q=(H.method||"GET").toUpperCase(),J=W.parse(H.url||""),X="{}";if(H.headerParameters?.parameters&&Array.isArray(H.headerParameters.parameters))X=`{ ${H.headerParameters.parameters.filter((A)=>A.name).map((A)=>`${JSON.stringify(A.name)}: ${W.parse(A.value)}`).join(", ")} }`;let Z="undefined";if(["POST","PUT","PATCH"].includes(Q)){if(H.jsonBody)Z=`JSON.stringify(${W.parse(H.jsonBody)})`;else if(H.bodyParameters?.parameters&&Array.isArray(H.bodyParameters.parameters))Z=`JSON.stringify({ ${H.bodyParameters.parameters.filter((A)=>A.name).map((A)=>`${JSON.stringify(A.name)}: ${W.parse(A.value)}`).join(", ")} })`}return`
-    // [Node: ${z.node.name}] Native HTTP Request (${Q})
-    ${z.variableName} = await Promise.all((${U} || inputItems).map(async (currentItem: N8nItem) => {
+      let matchedIndex = ${fallbackIndex};
+      ${cases.join(" else ")}
+      ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName}, matchedIndex);
+    }`;
+    }
+    static mapHttpRequestNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const method = (params.method || "GET").toUpperCase();
+      const urlExpr = ExpressionParser.parse(params.url || "");
+      let headersObj = "{}";
+      if (params.headerParameters?.parameters && Array.isArray(params.headerParameters.parameters)) {
+        const pairs = params.headerParameters.parameters.filter((p) => p.name).map((p) => `${JSON.stringify(p.name)}: ${ExpressionParser.parse(p.value)}`);
+        headersObj = `{ ${pairs.join(", ")} }`;
+      }
+      let bodySnippet = "undefined";
+      if (["POST", "PUT", "PATCH"].includes(method)) {
+        if (params.jsonBody) {
+          bodySnippet = `JSON.stringify(${ExpressionParser.parse(params.jsonBody)})`;
+        } else if (params.bodyParameters?.parameters && Array.isArray(params.bodyParameters.parameters)) {
+          const pairs = params.bodyParameters.parameters.filter((p) => p.name).map((p) => `${JSON.stringify(p.name)}: ${ExpressionParser.parse(p.value)}`);
+          bodySnippet = `JSON.stringify({ ${pairs.join(", ")} })`;
+        }
+      }
+      return `
+    // [Node: ${ctx.node.name}] Native HTTP Request (${method})
+    ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
       const item = currentItem;
-      const targetUrl = ${J};
-      const reqHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...${X} };
-      const reqBody = ${Z};
+      const targetUrl = ${urlExpr};
+      const reqHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...${headersObj} };
+      const reqBody = ${bodySnippet};
       const res = await fetch(targetUrl, {
-        method: ${JSON.stringify(Q)},
+        method: ${JSON.stringify(method)},
         headers: reqHeaders,
         ...(reqBody !== undefined ? { body: typeof reqBody === 'string' ? reqBody : JSON.stringify(reqBody) } : {})
       });
@@ -66,55 +492,82 @@
       try { data = JSON.parse(text); } catch { data = { raw: text }; }
       return { json: typeof data === 'object' && data !== null ? data : { data } };
     }));
-    item = ${z.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(z.node.name)}, ${z.variableName});`}static mapAggregateNode(z){let H=z.node.parameters||{},U=z.previousVariableName||"inputItems",Q=H.destinationFieldName||"data";return`
-    // [Node: ${z.node.name}] Aggregate Items
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+    }
+    static mapAggregateNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const destinationField = params.destinationFieldName || "data";
+      return `
+    // [Node: ${ctx.node.name}] Aggregate Items
     {
-      const source = ${U} || inputItems;
-      ${z.variableName} = [{ json: { ${JSON.stringify(Q)}: source.map((i: N8nItem) => i.json) } }];
-      item = ${z.variableName}[0];
-      ctx.setNodeOutput(${JSON.stringify(z.node.name)}, ${z.variableName});
-    }`}static mapSplitOutNode(z){let H=z.node.parameters||{},U=z.previousVariableName||"inputItems",Q=H.fieldToSplitOut||"data";return`
-    // [Node: ${z.node.name}] Split Out Array Field
+      const source = ${prevVar} || inputItems;
+      ${ctx.variableName} = [{ json: { ${JSON.stringify(destinationField)}: source.map((i: N8nItem) => i.json) } }];
+      item = ${ctx.variableName}[0];
+      ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});
+    }`;
+    }
+    static mapSplitOutNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const fieldToSplit = params.fieldToSplitOut || "data";
+      return `
+    // [Node: ${ctx.node.name}] Split Out Array Field
     {
-      const source = ${U} || inputItems;
+      const source = ${prevVar} || inputItems;
       const expanded: N8nItem[] = [];
       for (const entry of source) {
-        const arr = entry.json?.[${JSON.stringify(Q)}];
+        const arr = entry.json?.[${JSON.stringify(fieldToSplit)}];
         if (Array.isArray(arr)) {
           for (const el of arr) {
-            expanded.push({ json: typeof el === 'object' && el !== null ? el : { [${JSON.stringify(Q)}]: el } });
+            expanded.push({ json: typeof el === 'object' && el !== null ? el : { [${JSON.stringify(fieldToSplit)}]: el } });
           }
         }
       }
-      ${z.variableName} = expanded.length > 0 ? expanded : source;
-      item = ${z.variableName}[0] || { json: {} };
-      ctx.setNodeOutput(${JSON.stringify(z.node.name)}, ${z.variableName});
-    }`}static mapMergeNode(z){let H=z.node.incomingConnections||[],U=z.node.parameters?.mode||"append",Q=H.map((J)=>`(ctx.isBranchActive(${JSON.stringify(J.sourceNode)}, ${J.outputIndex}) ? (ctx.getNode(${JSON.stringify(J.sourceNode)})?.all() || []) : [])`);if(U==="combine"&&Q.length>=2)return`
-    // [Node: ${z.node.name}] Merge (Combine Mode)
+      ${ctx.variableName} = expanded.length > 0 ? expanded : source;
+      item = ${ctx.variableName}[0] || { json: {} };
+      ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});
+    }`;
+    }
+    static mapMergeNode(ctx) {
+      const incoming = ctx.node.incomingConnections || [];
+      const mode = ctx.node.parameters?.mode || "append";
+      const sources = incoming.map((c) => `(ctx.isBranchActive(${JSON.stringify(c.sourceNode)}, ${c.outputIndex}) ? (ctx.getNode(${JSON.stringify(c.sourceNode)})?.all() || []) : [])`);
+      if (mode === "combine" && sources.length >= 2) {
+        return `
+    // [Node: ${ctx.node.name}] Merge (Combine Mode)
     {
-      const left = ${Q[0]};
-      const right = ${Q[1]};
+      const left = ${sources[0]};
+      const right = ${sources[1]};
       const maxLen = Math.max(left.length, right.length);
       const merged: N8nItem[] = [];
       for (let i = 0; i < maxLen; i++) {
         merged.push({ json: { ...(left[i]?.json || {}), ...(right[i]?.json || {}) } });
       }
-      ${z.variableName} = merged.length > 0 ? merged : [{ json: {} }];
-      item = ${z.variableName}[0];
-      ctx.setNodeOutput(${JSON.stringify(z.node.name)}, ${z.variableName});
-    }`;return`
-    // [Node: ${z.node.name}] Merge (Append Mode)
+      ${ctx.variableName} = merged.length > 0 ? merged : [{ json: {} }];
+      item = ${ctx.variableName}[0];
+      ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});
+    }`;
+      }
+      return `
+    // [Node: ${ctx.node.name}] Merge (Append Mode)
     {
-      const combined = [${Q.join(", ")}].flat();
-      ${z.variableName} = combined.length > 0 ? combined : inputItems;
-      item = ${z.variableName}[0] || { json: {} };
-      ctx.setNodeOutput(${JSON.stringify(z.node.name)}, ${z.variableName});
-    }`}static mapPostgresNode(z){let H=z.node.parameters||{},U=z.previousVariableName||"inputItems",Q=W.parse(H.query||"SELECT 1;");return`
-    // [Node: ${z.node.name}] PostgreSQL Query (via DATABASE_URL env var)
-    ${z.variableName} = await Promise.all((${U} || inputItems).map(async (currentItem: N8nItem) => {
+      const combined = [${sources.join(", ")}].flat();
+      ${ctx.variableName} = combined.length > 0 ? combined : inputItems;
+      item = ${ctx.variableName}[0] || { json: {} };
+      ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});
+    }`;
+    }
+    static mapPostgresNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const queryExpr = ExpressionParser.parse(params.query || "SELECT 1;");
+      return `
+    // [Node: ${ctx.node.name}] PostgreSQL Query (via DATABASE_URL env var)
+    ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
       const item = currentItem;
-      const sql = ${Q};
+      const sql = ${queryExpr};
       if (!process.env.DATABASE_URL) {
         throw new Error('[n8n-to-fastify] DATABASE_URL environment variable is required for Postgres node.');
       }
@@ -130,14 +583,22 @@
       }
       return { json: { ...currentItem.json, _sqlPrepared: sql } };
     }));
-    item = ${z.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(z.node.name)}, ${z.variableName});`}static mapLlmNode(z){let H=z.node.parameters||{},U=z.previousVariableName||"inputItems",Q=H.modelId?.value||H.model||"gpt-4o-mini",J=H.messages?.values?.[0]?.content||H.prompt||H.text||"Hello",X=W.parse(J);return`
-    // [Node: ${z.node.name}] Native LLM Completion (OpenAI-compatible REST API)
-    ${z.variableName} = await Promise.all((${U} || inputItems).map(async (currentItem: N8nItem) => {
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+    }
+    static mapLlmNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const model = params.modelId?.value || params.model || "gpt-4o-mini";
+      const promptText = params.messages?.values?.[0]?.content || params.prompt || params.text || "Hello";
+      const promptExpr = ExpressionParser.parse(promptText);
+      return `
+    // [Node: ${ctx.node.name}] Native LLM Completion (OpenAI-compatible REST API)
+    ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
       const item = currentItem;
       const apiKey = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY || '';
       const baseUrl = process.env.LLM_BASE_URL || 'https://api.openai.com/v1';
-      const prompt = ${X};
+      const prompt = ${promptExpr};
       const res = await fetch(\`\${baseUrl}/chat/completions\`, {
         method: 'POST',
         headers: {
@@ -145,27 +606,53 @@
           'Authorization': \`Bearer \${apiKey}\`
         },
         body: JSON.stringify({
-          model: ${JSON.stringify(Q)},
+          model: ${JSON.stringify(model)},
           messages: [{ role: 'user', content: String(prompt) }]
         })
       });
       const data: any = await res.json();
       const text = data?.choices?.[0]?.message?.content || '';
-      return { json: { text, model: ${JSON.stringify(Q)}, usage: data?.usage } };
+      return { json: { text, model: ${JSON.stringify(model)}, usage: data?.usage } };
     }));
-    item = ${z.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(z.node.name)}, ${z.variableName});`}static mapWaitNode(z){let H=z.node.parameters||{},U=z.previousVariableName||"inputItems",Q=Number(H.amount||1),J=H.unit||"seconds",Z=Q*(J==="minutes"?60000:J==="hours"?3600000:1000);return`
-    // [Node: ${z.node.name}] Non-blocking Async Wait (${Q} ${J})
-    await new Promise((resolve) => setTimeout(resolve, ${Z}));
-    ${z.variableName} = ${U} || inputItems;
-    item = ${z.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(z.node.name)}, ${z.variableName});`}static mapGenericNode(z,H){let U=z.previousVariableName||"inputItems";return`
-    // [Node: ${z.node.name}] ${H} (Pass-through)
-    ${z.variableName} = ${U} || inputItems;
-    item = ${z.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(z.node.name)}, ${z.variableName});`}}class G{static sanitizeIdentifier(z){return z.replace(/[^a-zA-Z0-9_]/g,"_").replace(/^[0-9]/,"_$&").replace(/__+/g,"_")}static generateWorkflowCode(z){let H=`workflow_${this.sanitizeIdentifier(z.fileName)}`,U=(z.relativePath.match(/\//g)||[]).length,Q="../".repeat(U+1)+"runtime",J=`import { WorkflowContext } from '${Q}/workflow-context';
-import { n8n, N8nItem } from '${Q}/n8n-helper';
-import { executeSubworkflow, registerWorkflow } from '${Q}/workflow-registry';
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+    }
+    static mapWaitNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const amount = Number(params.amount || 1);
+      const unit = params.unit || "seconds";
+      const msMultiplier = unit === "minutes" ? 60000 : unit === "hours" ? 3600000 : 1000;
+      const delayMs = amount * msMultiplier;
+      return `
+    // [Node: ${ctx.node.name}] Non-blocking Async Wait (${amount} ${unit})
+    await new Promise((resolve) => setTimeout(resolve, ${delayMs}));
+    ${ctx.variableName} = ${prevVar} || inputItems;
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+    }
+    static mapGenericNode(ctx, label) {
+      const prevVar = ctx.previousVariableName || "inputItems";
+      return `
+    // [Node: ${ctx.node.name}] ${label} (Pass-through)
+    ${ctx.variableName} = ${prevVar} || inputItems;
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+    }
+  }
+
+  // src/compiler/code-generator.ts
+  class CodeGenerator {
+    static sanitizeIdentifier(str) {
+      return str.replace(/[^a-zA-Z0-9_]/g, "_").replace(/^[0-9]/, "_$&").replace(/__+/g, "_");
+    }
+    static generateWorkflowCode(wf) {
+      const functionName = `workflow_${this.sanitizeIdentifier(wf.fileName)}`;
+      const depth = (wf.relativePath.match(/\//g) || []).length;
+      const runtimePrefix = "../".repeat(depth + 1) + "runtime";
+      const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
+import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
+import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
 
 const DateTime = {
   now: () => ({
@@ -173,45 +660,134 @@ const DateTime = {
     toJSDate: () => new Date()
   })
 };
-`,X=`  let item: N8nItem = inputItems[0] || { json: {} };
-`,Z=`  ctx.setNodeOutput("__initial__", inputItems);
-`,B="inputItems",A=new Map;z.orderedNodes.forEach(($,q)=>{let O=`node_${q}_${this.sanitizeIdentifier($.name)}`;A.set($.name,O)});let K=z.orderedNodes.filter(($)=>$.type.includes("webhook")||$.type.includes("trigger")||$.type.includes("cron")),_=z.orderedNodes.filter(($)=>!K.includes($));K.forEach(($)=>{let q=z.orderedNodes.indexOf($),O=A.get($.name);X+=`  let ${O}: any = inputItems;
-`;let L=($.parameters?.path||$.name).toLowerCase().trim().replace(/^\/+/,"");Z+=`  const triggerNode_${q} = item?.json?.__triggerNode;
-`,Z+=`  const triggerPath_${q} = item?.json?.__triggerPath;
-`,Z+=`  if (!triggerNode_${q} || triggerNode_${q} === ${JSON.stringify($.name)} || triggerPath_${q} === ${JSON.stringify(L)}) {
-`,Z+=`    ${O} = inputItems;
-`,Z+=`    ctx.setNodeOutput(${JSON.stringify($.name)}, inputItems);
-`,Z+=`  }
-`}),_.forEach(($)=>{let q=A.get($.name);X+=`  let ${q}: any = inputItems;
-`;let O="inputItems",L="true";if($.incomingConnections&&$.incomingConnections.length>0){if($.incomingConnections.length===1){let D=$.incomingConnections[0];O=`(ctx.isBranchActive(${JSON.stringify(D.sourceNode)}, ${D.outputIndex}) ? ctx.getNode(${JSON.stringify(D.sourceNode)})?.all() : null)`}else O=`(${$.incomingConnections.map((T)=>`(ctx.isBranchActive(${JSON.stringify(T.sourceNode)}, ${T.outputIndex}) ? ctx.getNode(${JSON.stringify(T.sourceNode)})?.all() : null)`).join(" || ")})`;L=`(${$.incomingConnections.map((D)=>`ctx.isBranchActive(${JSON.stringify(D.sourceNode)}, ${D.outputIndex})`).join(" || ")})`}let I=M.mapNode({node:$,workflowName:z.name,variableName:q,previousVariableName:O}),C=`  if (${L}) {
-    ${I.trim().replace(/\n/g,`
+`;
+      let declCode = `  let item: N8nItem = inputItems[0] || { json: {} };
+`;
+      let bodyCode = `  ctx.setNodeOutput("__initial__", inputItems);
+`;
+      let prevVarName = "inputItems";
+      const nodeVarMap = new Map;
+      wf.orderedNodes.forEach((node, index) => {
+        const varName = `node_${index}_${this.sanitizeIdentifier(node.name)}`;
+        nodeVarMap.set(node.name, varName);
+      });
+      const triggers = wf.orderedNodes.filter((n) => n.type.includes("webhook") || n.type.includes("trigger") || n.type.includes("cron"));
+      const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n));
+      triggers.forEach((node) => {
+        const index = wf.orderedNodes.indexOf(node);
+        const varName = nodeVarMap.get(node.name);
+        declCode += `  let ${varName}: any = inputItems;
+`;
+        const rawNodePath = (node.parameters?.path || node.name).toLowerCase().trim().replace(/^\/+/, "");
+        bodyCode += `  const triggerNode_${index} = item?.json?.__triggerNode;
+`;
+        bodyCode += `  const triggerPath_${index} = item?.json?.__triggerPath;
+`;
+        bodyCode += `  if (!triggerNode_${index} || triggerNode_${index} === ${JSON.stringify(node.name)} || triggerPath_${index} === ${JSON.stringify(rawNodePath)}) {
+`;
+        bodyCode += `    ${varName} = inputItems;
+`;
+        bodyCode += `    ctx.setNodeOutput(${JSON.stringify(node.name)}, inputItems);
+`;
+        bodyCode += `  }
+`;
+      });
+      nonTriggers.forEach((node) => {
+        const varName = nodeVarMap.get(node.name);
+        declCode += `  let ${varName}: any = inputItems;
+`;
+        let actualPrevVar = `inputItems`;
+        let branchCheckStr = "true";
+        if (node.incomingConnections && node.incomingConnections.length > 0) {
+          if (node.incomingConnections.length === 1) {
+            const conn = node.incomingConnections[0];
+            actualPrevVar = `(ctx.isBranchActive(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex}) ? ctx.getNode(${JSON.stringify(conn.sourceNode)})?.all() : null)`;
+          } else {
+            const choices = node.incomingConnections.map((conn) => `(ctx.isBranchActive(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex}) ? ctx.getNode(${JSON.stringify(conn.sourceNode)})?.all() : null)`);
+            actualPrevVar = `(${choices.join(" || ")})`;
+          }
+          const branchChecks = node.incomingConnections.map((conn) => `ctx.isBranchActive(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`);
+          branchCheckStr = `(${branchChecks.join(" || ")})`;
+        }
+        const nodeCode = NodeMappers.mapNode({
+          node,
+          workflowName: wf.name,
+          variableName: varName,
+          previousVariableName: actualPrevVar
+        });
+        const finalExecutionBlock = `  if (${branchCheckStr}) {
+    ${nodeCode.trim().replace(/\n/g, `
     `)}
   }
-`;if($.ancestorTriggers&&$.ancestorTriggers.length>0){let E=$.ancestorTriggers.map((D)=>`ctx.hasExecutedNode(${JSON.stringify(D)})`).join(" || ");Z+=`  if (${E}) {
-  ${C.trim().replace(/\n/g,`
+`;
+        if (node.ancestorTriggers && node.ancestorTriggers.length > 0) {
+          const triggerConditions = node.ancestorTriggers.map((t) => `ctx.hasExecutedNode(${JSON.stringify(t)})`).join(" || ");
+          bodyCode += `  if (${triggerConditions}) {
+  ${finalExecutionBlock.trim().replace(/\n/g, `
   `)}
   }
-`}else Z+=C;B=$.name});let Y=z.orderedNodes[z.orderedNodes.length-1]?.name,F=Y?`(ctx.getNode(${JSON.stringify(Y)})?.all() || [{ json: item.json }])`:"inputItems",R=Array.from(new Set([z.id,z.name,z.fileName])).filter(Boolean);return`${J}
-export async function ${H}(
+`;
+        } else {
+          bodyCode += finalExecutionBlock;
+        }
+        prevVarName = node.name;
+      });
+      const lastNodeName = wf.orderedNodes[wf.orderedNodes.length - 1]?.name;
+      const returnItemsExpr = lastNodeName ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])` : `inputItems`;
+      const keys = Array.from(new Set([wf.id, wf.name, wf.fileName])).filter(Boolean);
+      return `${imports}
+export async function ${functionName}(
   inputItems: N8nItem[] = [{ json: {} }],
   parentCtx?: WorkflowContext
 ): Promise<{ items: N8nItem[]; context: WorkflowContext }> {
   const ctx = parentCtx || new WorkflowContext();
-${X}
-${Z}
-  const finalItems = ${F};
+  const $env = process.env;
+${declCode}
+${bodyCode}
+  const finalItems = ${returnItemsExpr};
   return { items: finalItems, context: ctx };
 }
 
-registerWorkflow(${JSON.stringify(R)}, ${H});
-`}}class j{static generateRoutesCode(z){let H=`import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+registerWorkflow(${JSON.stringify(keys)}, ${functionName});
+`;
+    }
+  }
+
+  // src/compiler/route-generator.ts
+  class RouteGenerator {
+    static generateRoutesCode(workflows) {
+      let imports = `import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { N8nItem } from '../runtime/n8n-helper';
 import { WorkflowContext } from '../runtime/workflow-context';
-`,U=[];z.forEach((X)=>{let Z=`workflow_${G.sanitizeIdentifier(X.fileName)}`,B=X.relativePath.replace(/\.ts$/,"");H+=`import { ${Z} } from '../workflows/${B}';
-`,U.push(Z)});let Q="",J=new Set;return z.forEach((X)=>{let Z=`workflow_${G.sanitizeIdentifier(X.fileName)}`;X.nodes.filter((A)=>A.type.includes("webhook")).forEach((A)=>{let K=(A.parameters?.path||X.fileName).toLowerCase().trim().replace(/^\/+/,""),_=(A.parameters?.httpMethod||"POST").toUpperCase(),Y=_==="ALL"?["GET","POST","PUT","DELETE"]:[_],F=Array.from(new Set([`/${K}`,`/webhook/${K}`]));Y.forEach((R)=>{F.forEach(($)=>{let q=`${R}:${$}`;if(J.has(q))return;J.add(q),Q+=`
+`;
+      const importedFunctions = [];
+      workflows.forEach((wf) => {
+        const functionName = `workflow_${CodeGenerator.sanitizeIdentifier(wf.fileName)}`;
+        const importPath = wf.relativePath.replace(/\.ts$/, "");
+        imports += `import { ${functionName} } from '../workflows/${importPath}';
+`;
+        importedFunctions.push(functionName);
+      });
+      let routeDefinitions = "";
+      const registeredRoutes = new Set;
+      workflows.forEach((wf) => {
+        const functionName = `workflow_${CodeGenerator.sanitizeIdentifier(wf.fileName)}`;
+        const webhooks = wf.nodes.filter((node) => node.type.includes("webhook"));
+        webhooks.forEach((node) => {
+          const rawPath = (node.parameters?.path || wf.fileName).toLowerCase().trim().replace(/^\/+/, "");
+          const configuredMethod = (node.parameters?.httpMethod || "POST").toUpperCase();
+          const methods = configuredMethod === "ALL" ? ["GET", "POST", "PUT", "DELETE"] : [configuredMethod];
+          const targetPaths = Array.from(new Set([`/${rawPath}`, `/webhook/${rawPath}`]));
+          methods.forEach((httpMethod) => {
+            targetPaths.forEach((routePath) => {
+              const routeKey = `${httpMethod}:${routePath}`;
+              if (registeredRoutes.has(routeKey))
+                return;
+              registeredRoutes.add(routeKey);
+              routeDefinitions += `
   fastify.route({
-    method: '${R}',
-    url: '${$}',
+    method: '${httpMethod}',
+    url: '${routePath}',
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
       const startTime = performance.now();
       const ctx = new WorkflowContext();
@@ -226,13 +802,13 @@ import { WorkflowContext } from '../runtime/workflow-context';
           body,
           query,
           headers,
-          __triggerNode: ${JSON.stringify(A.name)},
-          __triggerPath: ${JSON.stringify(K)}
+          __triggerNode: ${JSON.stringify(node.name)},
+          __triggerPath: ${JSON.stringify(rawPath)}
         }
       }];
 
       try {
-        const { items, context } = await ${Z}(inputItems, ctx);
+        const { items, context } = await ${functionName}(inputItems, ctx);
         const durationMs = (performance.now() - startTime).toFixed(2);
         reply.header('X-Compiled-By', 'n8n-to-fastify');
         reply.header('X-Execution-Time', \`\${durationMs}ms\`);
@@ -250,15 +826,23 @@ import { WorkflowContext } from '../runtime/workflow-context';
       }
     }
   });
-`})})})}),`${H}
+`;
+            });
+          });
+        });
+      });
+      return `${imports}
 // Prevent bundler/runtime tree-shaking so subworkflows self-register into WorkflowRegistry
-const _registeredWorkflows = [${U.join(", ")}];
+const _registeredWorkflows = [${importedFunctions.join(", ")}];
 void _registeredWorkflows;
 
 export async function registerCompiledRoutes(fastify: FastifyInstance): Promise<void> {
-${Q}
+${routeDefinitions}
 }
-`}static generateServerEntry(){return`import Fastify from 'fastify';
+`;
+    }
+    static generateServerEntry() {
+      return `import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { registerCompiledRoutes } from './routes/index';
 import { workflowRegistry } from './runtime/workflow-registry';
@@ -288,4 +872,46 @@ try {
   fastify.log.error(err);
   process.exit(1);
 }
-`}static generateOutputPackageJson(){return JSON.stringify({name:"compiled-n8n-service",version:"1.0.0",type:"module",scripts:{start:"bun run server.ts",dev:"bun --watch run server.ts"},dependencies:{"@fastify/cors":"^9.0.1",fastify:"^4.28.1"}},null,2)}}function P(z){let H=performance.now(),U=typeof z==="string"?JSON.parse(z):z,Q=V.parseWorkflow(U,U?.name||"workflow","workflow.ts");if(!Q)throw Error('Invalid n8n workflow JSON: missing "nodes" array.');let J=G.generateWorkflowCode(Q),X=j.generateRoutesCode([Q]),Z=(performance.now()-H).toFixed(2);return{name:Q.name,nodeCount:Q.nodes.length,triggerCount:Q.triggers.length,elapsedMs:Z,workflowCode:J,routesCode:X}}if(typeof window<"u")window.N8nToFastify={compileWorkflowJson:P};})();
+`;
+    }
+    static generateOutputPackageJson() {
+      return JSON.stringify({
+        name: "compiled-n8n-service",
+        version: "1.0.0",
+        type: "module",
+        scripts: {
+          start: "bun run server.ts",
+          dev: "bun --watch run server.ts"
+        },
+        dependencies: {
+          "@fastify/cors": "^9.0.1",
+          fastify: "^4.28.1"
+        }
+      }, null, 2);
+    }
+  }
+
+  // src/browser.ts
+  function compileWorkflowJson(jsonInput) {
+    const start = performance.now();
+    const raw = typeof jsonInput === "string" ? JSON.parse(jsonInput) : jsonInput;
+    const parsed = CoreWorkflowParser.parseWorkflow(raw, raw?.name || "workflow", "workflow.ts");
+    if (!parsed) {
+      throw new Error('Invalid n8n workflow JSON: missing "nodes" array.');
+    }
+    const workflowCode = CodeGenerator.generateWorkflowCode(parsed);
+    const routesCode = RouteGenerator.generateRoutesCode([parsed]);
+    const elapsedMs = (performance.now() - start).toFixed(2);
+    return {
+      name: parsed.name,
+      nodeCount: parsed.nodes.length,
+      triggerCount: parsed.triggers.length,
+      elapsedMs,
+      workflowCode,
+      routesCode
+    };
+  }
+  if (typeof window !== "undefined") {
+    window.N8nToFastify = { compileWorkflowJson };
+  }
+})();

@@ -81,13 +81,19 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 
 ---
 
+## 🔐 Runtime Environment
+
+Place a `.env` file in the generated service directory and run `bun run start` from that directory (Bun loads `.env` automatically at runtime). In both expressions and `Code` nodes, read variables with `$env.MY_VARIABLE` or `$env["MY_VARIABLE"]`. Always keep `.env` out of version control.
+
+---
+
 ## 🧩 Supported Nodes (v0.1)
 
 | n8n Node | Compiled Native Behavior |
 | :--- | :--- |
 | **Webhook** | Native Fastify route handler (`GET`, `POST`, `PUT`, `DELETE`, `ALL`) |
 | **Respond to Webhook** | `reply.code(status).send(payload)` with JSON/Text support |
-| **Code / Function** | Native async JavaScript execution with `$input`, `$json`, and `$('Node')` bindings |
+| **Code / Function** | Native async JavaScript execution with `$input`, `$json`, `$env`, and `$('Node')` bindings |
 | **Execute Workflow** | Direct in-memory function invocation via `WorkflowRegistry` |
 | **IF / Filter** | Deterministic branch tracking (`outputIndex 0` vs `1`) |
 | **Switch** | Multi-branch router matching rules + fallback |

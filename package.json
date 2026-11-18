@@ -9,7 +9,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "build:playground": "bun build src/browser.ts --outfile playground/compiler.js --target browser --format iife --minify",
+    "build:playground": "bun build src/browser.ts --outfile playground/compiler.js --target browser --format iife",
     "compile": "bun run bin/cli.ts compile",
     "test": "bun test",
     "benchmark": "bun run scripts/benchmark.ts"
