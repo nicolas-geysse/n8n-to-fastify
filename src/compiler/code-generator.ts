@@ -1,4 +1,4 @@
-import { ParsedWorkflow } from './parser';
+import { N8nNode, ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
 import { isPositionMerge } from './mappers/position-merge';
 import { collectLegacyNodePorts, usesLegacyNodeReferences } from './mappers/code-context';
@@ -58,7 +58,6 @@ const DateTime = {
 
     let declCode = '  let item: N8nItem = inputItems[0] || { json: {} };\n';
     let bodyCode = '  ctx.setNodeOutput("__initial__", inputItems);\n';
-    let prevVarName = 'inputItems';
 
     const nodeVarMap = new Map<string, string>();
     wf.orderedNodes.forEach((node, index) => {
@@ -83,10 +82,8 @@ const DateTime = {
         bodyCode += `  const triggerPath_${index} = item?.json?.__triggerPath;\n`;
         condition = `entryNode === undefined && (!triggerNode_${index} || triggerNode_${index} === ${nodeName} || triggerPath_${index} === ${JSON.stringify(rawNodePath)})`;
       }
-      bodyCode += `  if (${condition}) {\n`;
-      bodyCode += `    ${varName} = inputItems;\n`;
-      bodyCode += `    ctx.setNodeOutput(${JSON.stringify(node.name)}, inputItems);\n`;
-      bodyCode += `  }\n`;
+      const nodeCode = `${varName} = inputItems;\nctx.setNodeOutput(${nodeName}, inputItems);`;
+      bodyCode += this.generateNodeBlock(wf.id, node, condition, nodeCode);
     });
 
     nonTriggers.forEach((node) => {
@@ -121,20 +118,17 @@ ${nodeCode.trim()}
 });`;
       }
 
-      const finalExecutionBlock = `  if (${branchCheckStr}) {\n    ${nodeCode.trim().replace(/\n/g, '\n    ')}\n  }\n`;
-
-      if (node.ancestorTriggers && node.ancestorTriggers.length > 0) {
-        const triggerConditions = node.ancestorTriggers
+      const ancestorTriggers = node.ancestorTriggers ?? [];
+      if (ancestorTriggers.length > 0) {
+        const triggerConditions = ancestorTriggers
           .map((t) => `ctx.hasExecutedNode(${JSON.stringify(t)})`)
           .join(' || ');
-        bodyCode += `  if (${triggerConditions}) {\n  ${finalExecutionBlock.trim().replace(/\n/g, '\n  ')}\n  }\n`;
+        branchCheckStr = `(${triggerConditions}) && ${branchCheckStr}`;
       } else if (hasRabbitMqTrigger) {
-        bodyCode += `  if (entryNode === undefined) {\n  ${finalExecutionBlock.trim().replace(/\n/g, '\n  ')}\n  }\n`;
-      } else {
-        bodyCode += finalExecutionBlock;
+        branchCheckStr = `entryNode === undefined && ${branchCheckStr}`;
       }
-
-      prevVarName = node.name;
+      bodyCode += this.generateNodeBlock(wf.id, node, branchCheckStr, nodeCode,
+        ancestorTriggers.length > 0 || hasRabbitMqTrigger ? '      ' : '    ');
     });
 
     const lastNodeName = wf.orderedNodes[wf.orderedNodes.length - 1]?.name;
@@ -159,6 +153,31 @@ ${bodyCode}
 }
 
 registerWorkflow(${JSON.stringify(keys)}, ${functionName});
+`;
+  }
+
+  private static generateNodeBlock(
+    workflowId: string,
+    node: N8nNode,
+    condition: string,
+    nodeCode: string,
+    nodeIndent = '    ',
+  ): string {
+    const traceArgs = [workflowId, node.id || node.name, node.name].map(value => JSON.stringify(value)).join(', ');
+    // Keep the previous indentation because it also affects multiline JavaScript literals.
+    const body = nodeIndent + nodeCode.trim().replace(/\n/g, `\n${nodeIndent}`);
+    return `  if (${condition}) {
+    const finishTrace = ctx.startNodeTrace(${traceArgs});
+    try {
+${body}
+    } catch (error) {
+      finishTrace?.('error');
+      throw error;
+    }
+    finishTrace?.('completed');
+  } else {
+    ctx.skipNodeTrace(${traceArgs});
+  }
 `;
   }
 }

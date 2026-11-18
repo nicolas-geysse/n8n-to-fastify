@@ -1,4 +1,6 @@
 import { N8nItem } from './n8n-helper';
+import { WorkflowTrace } from './workflow-trace';
+import type { NodeTraceSink } from './workflow-trace';
 
 export interface NodeAccessor {
   item?: N8nItem;
@@ -16,7 +18,23 @@ export class WorkflowContext {
   private outputBatches = new Map<string, Map<number, N8nItem[][]>>();
   private activeBranches = new Map<string, Set<number>>();
   private executedNodes = new Set<string>();
+  private readonly trace?: WorkflowTrace;
   public webhookResponse?: { statusCode: number; body: any; headers?: Record<string, string> };
+
+  constructor(traceSink?: NodeTraceSink) {
+    if (!traceSink && process.env.N8N_TO_FASTIFY_TRACE === '1') {
+      traceSink = event => console.info(JSON.stringify(event));
+    }
+    if (traceSink) this.trace = new WorkflowTrace(traceSink);
+  }
+
+  public startNodeTrace(workflowId: string, nodeId: string, nodeName: string) {
+    return this.trace?.startNode({ workflowId, nodeId, nodeName });
+  }
+
+  public skipNodeTrace(workflowId: string, nodeId: string, nodeName: string): void {
+    this.trace?.skipNode({ workflowId, nodeId, nodeName });
+  }
 
   public setNodeOutput(nodeName: string, items: N8nItem[], activeOutputIndex: number = 0): void {
     this.outputPorts.delete(nodeName);
@@ -24,6 +42,7 @@ export class WorkflowContext {
     this.nodeOutputs.set(nodeName, items);
     this.executedNodes.add(nodeName);
     this.activateBranch(nodeName, activeOutputIndex);
+    this.trace?.recordOutput(nodeName, activeOutputIndex, items.length);
   }
 
   public setNodeOutputs(nodeName: string, outputs: Iterable<[number, N8nItem[]]>, items: N8nItem[]): void {
