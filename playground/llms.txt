@@ -1,0 +1,28 @@
+# n8n-to-fastify
+
+> Ahead-Of-Time (AOT) compiler that transpiles visual n8n workflow JSON exports (including nested subworkflows) into standalone, bare-metal TypeScript/Fastify microservices with zero runtime interpreter overhead.
+
+## Links
+
+- Repository: https://github.com/rogeriomaciel/n8n-to-fastify
+- Official Landing Page & Live Playground: https://www.rogeriomaciel.com.br/en/n8n-to-fastify/
+- GitHub Pages Playground: https://rogeriomaciel.github.io/n8n-to-fastify/
+- Releases: https://github.com/rogeriomaciel/n8n-to-fastify/releases
+- Documentation (README): https://github.com/rogeriomaciel/n8n-to-fastify/blob/main/README.md
+
+## Core Capabilities
+
+- **In-Memory Subworkflow Transpilation**: Compiles directories of workflows into a `WorkflowRegistry` where `Execute Workflow` compiles to direct async TypeScript function calls (< 0.05ms, zero HTTP hops).
+- **Strict Compatibility & DAG Validation**: `--strict` flag reports unsupported node types/options and detects cyclic dependencies at build time (while supporting bounded single-entry polling loops via `N8N_TO_FASTIFY_POLL_MAX_ATTEMPTS`).
+- **Per-Item Routing & Reconvergence**: Deterministic per-item branching for `IF` and `Switch` (rules and expression modes), positional `Merge` across up to 10 ports, and `runNodeBatches` for reconverging paths.
+- **Production Node Support**: Webhooks (with redacted 500 error IDs), `Code` (`$env`, `--dependencies`, `continueRegularOutput`, legacy `$node` bindings), `Set / Edit Fields` (v3.4 JSON Output + binary preservation), `HTTP Request` (JSON + multipart binary), `RabbitMQ` (exchange publisher + post-success ack trigger with graceful drain), `S3` v1 downloads, `Convert to File` (JSON), `Compression` (ZIP/GZIP decompression with anti-Zip-Bomb and anti-Zip-Slip guards), `Wait` (dynamic runtime intervals), `Stop and Error`, `PostgreSQL`, and `OpenAI / Gemini LLM`.
+- **Observability**: Opt-in structured JSON node execution traces (`N8N_TO_FASTIFY_TRACE=1`) without payload or error leakage.
+
+## Architecture Guides
+
+- Solving n8n OOM Crashes with Compiled Services: https://rogeriomaciel.com.br/en/solutions/n8n-out-of-memory-oom-solution/
+- Compiling n8n RabbitMQ Triggers & Publishers with Post-Success Ack: https://rogeriomaciel.com.br/en/solutions/compile-n8n-rabbitmq-ack-after-success/
+- Redacting Uncaught Webhook Errors & Opt-In Structured Tracing: https://rogeriomaciel.com.br/en/solutions/redact-webhook-errors-structured-tracing-fastify/
+- Preserving Binary Data, S3 Downloads & Multipart Uploads: https://rogeriomaciel.com.br/en/solutions/preserve-binary-data-s3-multipart-compiled-workflows/
+- Strict Compatibility Checks & Per-Item IF/Switch Routing: https://rogeriomaciel.com.br/en/solutions/strict-workflow-compatibility-checks-deterministic-routing/
+- GitOps & CI/CD Versioning for n8n Workflows: https://rogeriomaciel.com.br/en/solutions/gitops-cicd-n8n-production/

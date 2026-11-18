@@ -1,5 +1,7 @@
 # ⚡ n8n-to-fastify
 
+**`n8n-to-fastify`** is an open-source Ahead-Of-Time (AOT) compiler that transpiles exported n8n workflow JSONs (including nested subworkflows) into standalone, zero-overhead TypeScript/Fastify microservices. Built for engineering teams hitting n8n Out-of-Memory (OOM) crashes, database queue locks, and ~200ms+ webhook latency in production, it eliminates the runtime interpreter so you can design visually in n8n and deploy bare-metal Node.js/Bun services via CI/CD.
+
 [![CI](https://github.com/rogeriomaciel/n8n-to-fastify/actions/workflows/ci.yml/badge.svg)](https://github.com/rogeriomaciel/n8n-to-fastify/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![Fastify](https://img.shields.io/badge/Fastify-v4.x-black.svg)](https://www.fastify.io/)
@@ -9,8 +11,6 @@
 > **Use n8n as your visual IDE in staging. Compile & deploy pure, bare-metal Fastify microservices to production via CI/CD.**
 >
 > **[⚡ Try the Live Browser Playground](https://www.rogeriomaciel.com.br/en/n8n-to-fastify/)** *(100% client-side — paste any n8n JSON, zero data leaves your browser)*
-
-**`n8n-to-fastify`** is an Ahead-Of-Time (AOT) compiler that ingests exported n8n workflow JSONs (including nested subworkflows) and transpiles them into standalone, zero-overhead TypeScript/Fastify HTTP services.
 
 ---
 

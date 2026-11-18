@@ -32,7 +32,7 @@ function readDependencies(filePath: string): Record<string, string> {
 program
   .name('n8n-to-fastify')
   .description('Ahead-Of-Time (AOT) compiler that transpiles n8n workflows into bare-metal Fastify microservices')
-  .version('0.1.0');
+  .version('0.2.0');
 
 const compile = program
   .command('compile')

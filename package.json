@@ -1,6 +1,6 @@
 {
   "name": "n8n-to-fastify",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Ahead-Of-Time (AOT) Compiler that transpiles visual n8n workflows into high-throughput, standalone Node.js/Fastify microservices with in-memory subworkflow execution.",
   "bin": {
     "n8n-to-fastify": "./bin/cli.ts"
