@@ -99,6 +99,7 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 | **PostgreSQL** | Parameterized SQL execution via `DATABASE_URL` |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | Non-blocking async `setTimeout` promise |
+| **Stop and Error** | Stops an active workflow path with a message or structured error |
 
 ---
 
