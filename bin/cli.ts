@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { WorkflowParser } from '../src/compiler/parser';
 import { CodeGenerator } from '../src/compiler/code-generator';
+import { getCompatibilityIssues } from '../src/compiler/compatibility';
 import { RouteGenerator } from '../src/compiler/route-generator';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -33,13 +34,14 @@ program
   .description('Ahead-Of-Time (AOT) compiler that transpiles n8n workflows into bare-metal Fastify microservices')
   .version('0.1.0');
 
-program
+const compile = program
   .command('compile')
   .description('Compile a single workflow.json or a directory of workflows into a standalone Fastify project')
   .argument('<input>', 'Path to a workflow .json file or directory of workflows')
   .option('-o, --out <dir>', 'Output directory for the generated microservice', './compiled-service')
   .option('--dependencies <file>', 'JSON file mapping npm package names to versions for the generated service')
-  .action((input: string, options: { out: string; dependencies?: string }) => {
+  .option('--strict', 'Reject known unsupported workflow features before generating output')
+  .action((input: string, options: { out: string; dependencies?: string; strict?: boolean }) => {
     let dependencies: Record<string, string> | undefined;
     try {
       dependencies = options.dependencies ? readDependencies(options.dependencies) : undefined;
@@ -53,10 +55,17 @@ program
 
     console.log(`\n⚡ [n8n-to-fastify] Parsing workflows from: ${path.resolve(input)}`);
 
-    const workflows = WorkflowParser.parseInput(input);
+    const workflows = WorkflowParser.parseInput(input, { failOnParseError: options.strict });
     if (workflows.length === 0) {
       console.error('❌ No valid n8n workflows found.');
       process.exit(1);
+    }
+
+    if (options.strict) {
+      const issues = workflows.flatMap(getCompatibilityIssues);
+      if (issues.length > 0) {
+        program.error(`[n8n-to-fastify] Strict compatibility check failed.\n${issues.map(issue => `  - ${issue}`).join('\n')}`);
+      }
     }
 
     // Prepare output directories

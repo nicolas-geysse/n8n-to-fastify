@@ -160,6 +160,18 @@ flowchart LR
 
 ---
 
+## 🛡️ Strict Compatibility Checks
+
+```bash
+bun run compile ./workflows --strict --out ./compiled-service
+```
+
+In `--strict` mode, the CLI validates workflows and stops before writing output if it detects known unsupported features: unsupported node types, non-`main` connections, disabled nodes, unsupported error handling (`continueOnFail` / `onError`), unsupported `HTTP Request` or `Edit Fields` (`raw`) options, or `Merge` (`combine`) with more than two inputs. Place only workflow exports in the input directory, as invalid JSON or non-workflow JSON files also fail compilation in strict mode.
+
+Passing `--strict` means no known compatibility issues were detected; always validate runtime behavior against representative n8n runs.
+
+---
+
 ## 👤 Author & Enterprise Migration Consulting
 
 Built by **[Rogério Maciel](https://rogeriomaciel.com.br/en/)** — Software Architect (20+ years in production systems, Ex-Head at Neoway, Ex-CTO).

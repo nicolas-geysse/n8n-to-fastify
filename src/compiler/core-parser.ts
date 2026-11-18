@@ -6,6 +6,8 @@ export interface N8nNode {
   position: [number, number];
   parameters: Record<string, any>;
   credentials?: Record<string, any>;
+  disabled?: boolean;
+  continueOnFail?: boolean;
   onError?: string;
   incomingConnections?: { sourceNode: string; outputIndex: number }[];
   ancestorTriggers?: string[];
