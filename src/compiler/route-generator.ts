@@ -187,7 +187,10 @@ try {
   /**
    * Generates package.json for the compiled standalone microservice.
    */
-  static generateOutputPackageJson(workflows: ParsedWorkflow[] = []): string {
+  static generateOutputPackageJson(
+    workflows: ParsedWorkflow[] = [],
+    dependencies: Record<string, string> = {},
+  ): string {
     const needsS3 = workflows.some(workflow => workflow.nodes.some(node => node.type === s3NodeType));
     const needsRabbitMq = workflows.some((workflow) =>
       getRabbitMqTriggers(workflow).length > 0 ||
@@ -207,6 +210,7 @@ try {
           fastify: '^4.28.1',
           ...(needsS3 ? { '@aws-sdk/client-s3': '3.808.0', 'mime-types': '^3.0.1' } : {}),
           ...(needsRabbitMq ? { amqplib: '^0.10.9' } : {}),
+          ...dependencies,
         },
       },
       null,
