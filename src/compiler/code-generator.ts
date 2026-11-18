@@ -60,33 +60,32 @@ const DateTime = {
       const varName = nodeVarMap.get(node.name)!;
       declCode += `  let ${varName}: any = inputItems;\n`;
 
-      let actualPrevVar = `inputItems`;
       let branchCheckStr = 'true';
+      const incoming = node.incomingConnections ?? [];
+      const runPerIncomingBatch = incoming.length > 0 && !node.type.includes('merge');
 
-      if (node.incomingConnections && node.incomingConnections.length > 0) {
-        if (node.incomingConnections.length === 1) {
-          const conn = node.incomingConnections[0];
-          actualPrevVar = `(ctx.isBranchActive(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex}) ? ctx.getNode(${JSON.stringify(conn.sourceNode)})?.all() : null)`;
-        } else {
-          const choices = node.incomingConnections.map(
-            (conn) =>
-              `(ctx.isBranchActive(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex}) ? ctx.getNode(${JSON.stringify(conn.sourceNode)})?.all() : null)`
-          );
-          actualPrevVar = `(${choices.join(' || ')})`;
-        }
-
-        const branchChecks = node.incomingConnections.map(
+      if (incoming.length > 0) {
+        const branchChecks = incoming.map(
           (conn) => `ctx.isBranchActive(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`
         );
         branchCheckStr = `(${branchChecks.join(' || ')})`;
       }
 
-      const nodeCode = NodeMappers.mapNode({
+      let nodeCode = NodeMappers.mapNode({
         node,
         workflowName: wf.name,
         variableName: varName,
-        previousVariableName: actualPrevVar,
+        previousVariableName: runPerIncomingBatch ? 'incomingItems' : 'inputItems',
       });
+      if (runPerIncomingBatch) {
+        const batches = incoming.map(
+          conn => `ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`
+        );
+        // Keep the mapper body's original indentation, including multiline literals.
+        nodeCode = `await ctx.runNodeBatches(${JSON.stringify(node.name)}, [${batches.join(', ')}].flat(), async (incomingItems) => {
+${nodeCode.trim()}
+});`;
+      }
 
       const ancestorTriggers = node.ancestorTriggers ?? [];
       if (ancestorTriggers.length > 0) {

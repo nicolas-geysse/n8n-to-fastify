@@ -169,7 +169,7 @@
 
   // src/compiler/expression-parser.ts
   class ExpressionParser {
-    static parse(expression) {
+    static parse(expression, firstInputItem) {
       if (expression === undefined || expression === null) {
         return JSON.stringify("");
       }
@@ -185,7 +185,7 @@
         if (innerContent.startsWith("{{") && innerContent.endsWith("}}")) {
           const between = innerContent.substring(2, innerContent.length - 2).trim();
           if (!between.includes("{{") && !between.includes("}}")) {
-            const transformed = this.transformTokens(between);
+            const transformed = this.transformTokens(between, firstInputItem);
             return `(${transformed})`;
           }
         }
@@ -194,7 +194,7 @@
       const replacements = [];
       let placeholderIdx = 0;
       const tokenized = expr.replace(/\{\{(.*?)\}\}/g, (_, inner) => {
-        const transformed = this.transformTokens(inner.trim());
+        const transformed = this.transformTokens(inner.trim(), firstInputItem);
         const placeholder = `__EXPR_PLACEHOLDER_${placeholderIdx++}__`;
         replacements.push(`\${(${transformed}) ?? ''}`);
         return placeholder;
@@ -205,7 +205,7 @@
       });
       return `\`${safeLiteral}\``;
     }
-    static transformTokens(code) {
+    static transformTokens(code, firstInputItem) {
       let result = code;
       result = result.replace(/\$now\b/g, "new Date().toISOString()");
       result = result.replace(/\$today\b/g, 'new Date().toISOString().split("T")[0]');
@@ -229,7 +229,9 @@
         const parts = path.split(".").filter(Boolean);
         return `item?.json?.${parts.join("?.")}`;
       });
-      result = result.replace(/\$input\.first\(\)\.json/g, "item?.json");
+      result = result.replace(/\$input\.first\(\)\.json/g, `${firstInputItem ?? "item"}?.json`);
+      if (firstInputItem)
+        result = result.replace(/\$input\.first\(\)/g, firstInputItem);
       result = result.replace(/\$input\.item\.json/g, "item?.json");
       result = result.replace(/\$input\.all\(\)/g, "inputItems");
       result = result.replace(/\$env\.([a-zA-Z0-9_]+)/g, (_, envVar) => {
@@ -255,7 +257,10 @@
       if (type.includes("executeWorkflow")) {
         return this.mapSubworkflowNode(ctx);
       }
-      if (type.includes("if") || type.includes("filter")) {
+      if (type.includes("filter")) {
+        return this.mapFilterNode(ctx);
+      }
+      if (type.includes("if")) {
         return this.mapIfNode(ctx);
       }
       if (type.includes("switch")) {
@@ -378,15 +383,23 @@
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
     }
-    static mapIfNode(ctx) {
-      const params = ctx.node.parameters || {};
-      const prevVar = ctx.previousVariableName || "inputItems";
+    static parseConditions(group, legacyFilter = false) {
       const conditions = [];
-      if (params.conditions?.conditions && Array.isArray(params.conditions.conditions)) {
-        for (const cond of params.conditions.conditions) {
-          const left = ExpressionParser.parse(cond.leftValue);
-          const right = ExpressionParser.parse(cond.rightValue);
+      const firstInputItem = legacyFilter ? undefined : "firstInputItem";
+      if (Array.isArray(group?.conditions)) {
+        for (const cond of group.conditions) {
+          let left = ExpressionParser.parse(cond.leftValue, firstInputItem);
+          let right = ExpressionParser.parse(cond.rightValue, firstInputItem);
           const op = cond.operator?.operation || "equals";
+          if (legacyFilter && ["true", "false", "gte", "lte"].includes(op)) {
+            conditions.push(`Boolean(${left})`);
+            continue;
+          }
+          if (!legacyFilter && group.options?.caseSensitive === false && cond.operator?.type === "string") {
+            const lowerCase = "(value: unknown) => typeof value === 'string' ? value.toLowerCase() : value";
+            left = `((${lowerCase})(${left}))`;
+            right = `((${lowerCase})(${right}))`;
+          }
           switch (op) {
             case "equals":
             case "equal":
@@ -399,6 +412,12 @@
             case "contains":
               conditions.push(`String(${left} ?? '').includes(String(${right} ?? ''))`);
               break;
+            case "true":
+              conditions.push(`(${left} === true)`);
+              break;
+            case "false":
+              conditions.push(`(${left} === false)`);
+              break;
             case "gt":
             case "larger":
               conditions.push(`(Number(${left}) > Number(${right}))`);
@@ -406,6 +425,12 @@
             case "lt":
             case "smaller":
               conditions.push(`(Number(${left}) < Number(${right}))`);
+              break;
+            case "gte":
+              conditions.push(`(Number(${left}) >= Number(${right}))`);
+              break;
+            case "lte":
+              conditions.push(`(Number(${left}) <= Number(${right}))`);
               break;
             case "isEmpty":
             case "empty":
@@ -420,10 +445,14 @@
           }
         }
       }
-      const combinator = params.conditions?.combinator === "or" ? " || " : " && ";
-      const conditionExpr = conditions.length > 0 ? conditions.join(combinator) : "true";
+      const combinator = group?.combinator === "or" ? " || " : " && ";
+      return conditions.length ? conditions.join(combinator) : "true";
+    }
+    static mapFilterNode(ctx) {
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const conditionExpr = this.parseConditions(ctx.node.parameters?.conditions, true);
       return `
-    // [Node: ${ctx.node.name}] Conditional Branch (IF)
+    // [Node: ${ctx.node.name}] Filter
     ${ctx.variableName} = ${prevVar} || inputItems;
     item = ${ctx.variableName}[0] || { json: {} };
     {
@@ -432,28 +461,83 @@
       ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName}, activeIndex);
     }`;
     }
+    static mapIfNode(ctx) {
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const conditionExpr = this.parseConditions(ctx.node.parameters?.conditions);
+      return `
+    // [Node: ${ctx.node.name}] Conditional Branch (IF)
+    ${ctx.variableName} = ${prevVar} || inputItems;
+    {
+      const firstInputItem: N8nItem | undefined = ${ctx.variableName}[0];
+      const outputs: N8nItem[][] = [[], []];
+      for (const item of ${ctx.variableName} as N8nItem[]) {
+        const port = (${conditionExpr}) ? 0 : 1;
+        outputs[port].push(item);
+      }
+      ctx.setNodeOutputs(${JSON.stringify(ctx.node.name)}, outputs.entries(), ${ctx.variableName});
+    }
+    item = ${ctx.variableName}[0] || { json: {} };`;
+    }
     static mapSwitchNode(ctx) {
       const params = ctx.node.parameters || {};
       const prevVar = ctx.previousVariableName || "inputItems";
       const rules = params.rules?.values || [];
-      const cases = [];
-      rules.forEach((rule, idx) => {
-        const cond = rule.conditions?.conditions?.[0];
-        if (cond) {
-          const left = ExpressionParser.parse(cond.leftValue);
-          const right = ExpressionParser.parse(cond.rightValue);
-          cases.push(`if (${left} == ${right}) { matchedIndex = ${idx}; }`);
+      const options = params.options ?? {};
+      const fallback = options.fallbackOutput ?? "none";
+      const fallbackPort = fallback === "extra" ? rules.length : fallback;
+      const hasFallback = fallback === "extra" || Number.isInteger(fallbackPort) && fallbackPort >= 0 && fallbackPort < rules.length;
+      const fallbackCode = hasFallback ? `
+        if (!matched) {
+          send(item, ${fallbackPort});
+          matched = true;
+        }` : "";
+      const predicates = rules.map((rule) => `(item: N8nItem) => (${rule.conditions ? this.parseConditions(rule.conditions) : "false"})`);
+      const matchRules = `
+      const predicates = [${predicates.join(", ")}];
+      for (const item of source) {
+        let matched = false;
+        for (const [port, matches] of predicates.entries()) {
+          if (matches(item)) {
+            send(item, port);
+            matched = true;
+            if (!(${ExpressionParser.parse(options.allMatchingOutputs ?? false, "firstInputItem")})) break;
+          }
         }
-      });
-      const fallbackIndex = rules.length;
+        ${fallbackCode}
+        if (matched) routed.push(item);
+      }`;
+      const matchExpression = `
+      const numberOutputs = source.length > 0
+        ? ((item: N8nItem) => (${ExpressionParser.parse(params.numberOutputs ?? 4, "firstInputItem")}))(source[0])
+        : 0;
+      for (const item of source) {
+        const port = ${ExpressionParser.parse(params.output ?? 0, "firstInputItem")};
+        if (!Number.isSafeInteger(numberOutputs) || !Number.isSafeInteger(port) || port < 0 || port >= numberOutputs) {
+          throw new Error('Switch expression returned an invalid output index');
+        }
+        send(item, port);
+        routed.push(item);
+      }
+    `;
       return `
     // [Node: ${ctx.node.name}] Switch Router
-    ${ctx.variableName} = ${prevVar} || inputItems;
-    item = ${ctx.variableName}[0] || { json: {} };
     {
-      let matchedIndex = ${fallbackIndex};
-      ${cases.join(" else ")}
-      ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName}, matchedIndex);
+      const source: N8nItem[] = ${prevVar} || inputItems;
+      const firstInputItem = source[0];
+      const outputs = new Map<number, N8nItem[]>();
+      const routed: N8nItem[] = [];
+      const send = (item: N8nItem, port: number) => {
+        let items = outputs.get(port);
+        if (!items) {
+          items = [];
+          outputs.set(port, items);
+        }
+        items.push(item);
+      };
+      ${params.mode === "expression" ? matchExpression : matchRules}
+      ${ctx.variableName} = routed;
+      item = routed[0] || { json: {} };
+      ctx.setNodeOutputs(${JSON.stringify(ctx.node.name)}, outputs, routed);
     }`;
     }
     static mapHttpRequestNode(ctx) {
@@ -533,7 +617,7 @@
     static mapMergeNode(ctx) {
       const incoming = ctx.node.incomingConnections || [];
       const mode = ctx.node.parameters?.mode || "append";
-      const sources = incoming.map((c) => `(ctx.isBranchActive(${JSON.stringify(c.sourceNode)}, ${c.outputIndex}) ? (ctx.getNode(${JSON.stringify(c.sourceNode)})?.all() || []) : [])`);
+      const sources = incoming.map((c) => `(ctx.getNodeOutput(${JSON.stringify(c.sourceNode)}, ${c.outputIndex}) || [])`);
       if (mode === "combine" && sources.length >= 2) {
         return `
     // [Node: ${ctx.node.name}] Merge (Combine Mode)
@@ -691,25 +775,25 @@ ctx.setNodeOutput(${JSON.stringify(node.name)}, inputItems);`;
         const varName = nodeVarMap.get(node.name);
         declCode += `  let ${varName}: any = inputItems;
 `;
-        let actualPrevVar = `inputItems`;
         let branchCheckStr = "true";
-        if (node.incomingConnections && node.incomingConnections.length > 0) {
-          if (node.incomingConnections.length === 1) {
-            const conn = node.incomingConnections[0];
-            actualPrevVar = `(ctx.isBranchActive(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex}) ? ctx.getNode(${JSON.stringify(conn.sourceNode)})?.all() : null)`;
-          } else {
-            const choices = node.incomingConnections.map((conn) => `(ctx.isBranchActive(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex}) ? ctx.getNode(${JSON.stringify(conn.sourceNode)})?.all() : null)`);
-            actualPrevVar = `(${choices.join(" || ")})`;
-          }
-          const branchChecks = node.incomingConnections.map((conn) => `ctx.isBranchActive(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`);
+        const incoming = node.incomingConnections ?? [];
+        const runPerIncomingBatch = incoming.length > 0 && !node.type.includes("merge");
+        if (incoming.length > 0) {
+          const branchChecks = incoming.map((conn) => `ctx.isBranchActive(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`);
           branchCheckStr = `(${branchChecks.join(" || ")})`;
         }
-        const nodeCode = NodeMappers.mapNode({
+        let nodeCode = NodeMappers.mapNode({
           node,
           workflowName: wf.name,
           variableName: varName,
-          previousVariableName: actualPrevVar
+          previousVariableName: runPerIncomingBatch ? "incomingItems" : "inputItems"
         });
+        if (runPerIncomingBatch) {
+          const batches = incoming.map((conn) => `ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`);
+          nodeCode = `await ctx.runNodeBatches(${JSON.stringify(node.name)}, [${batches.join(", ")}].flat(), async (incomingItems) => {
+${nodeCode.trim()}
+});`;
+        }
         const ancestorTriggers = node.ancestorTriggers ?? [];
         if (ancestorTriggers.length > 0) {
           const triggerConditions = ancestorTriggers.map((t) => `ctx.hasExecutedNode(${JSON.stringify(t)})`).join(" || ");
