@@ -1,4 +1,5 @@
 import type { ParsedWorkflow } from './core-parser';
+import { continuesCodeOnRegularOutput } from './mappers/code-errors';
 
 const supportedNodeTypes = new Set([
   ...[
@@ -49,7 +50,7 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     if (node.continueOnFail) {
       report(node.name, 'legacy continueOnFail is ignored');
     }
-    if (node.onError && node.onError !== 'stopWorkflow') {
+    if (node.onError && node.onError !== 'stopWorkflow' && !continuesCodeOnRegularOutput(node)) {
       report(node.name, 'the configured onError behavior is ignored');
     }
 

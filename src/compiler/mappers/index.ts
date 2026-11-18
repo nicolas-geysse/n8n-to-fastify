@@ -1,5 +1,6 @@
 import { N8nNode } from '../parser';
 import { ExpressionParser } from '../expression-parser';
+import { continuesCodeOnRegularOutput } from './code-errors';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -119,14 +120,24 @@ export class NodeMappers {
       .replace(/\$\(['"](.*?)['"]\)\.all\(\)/g, (_: string, n: string) => `(ctx.getNode(${JSON.stringify(n)})?.all() || [])`)
       .replace(/\$now/g, 'DateTime.now()');
 
-    return `
-    // [Node: ${ctx.node.name}] Code Execution
-    ${ctx.variableName} = await (async () => {
-      const currentItems = ${prevVar} || inputItems;
+    const runCode = `
       const result = await (async () => {
         ${transformedCode}
       })();
-      return n8n.normalizeItems(result);
+      return n8n.normalizeItems(result);`;
+    // Keep the user's code indentation unchanged, including multiline template literals.
+    const execution = continuesCodeOnRegularOutput(ctx.node)
+      ? `
+      try {${runCode}
+      } catch (error) {
+        return [{ json: { error: error instanceof Error ? error.message : String(error) } }];
+      }`
+      : runCode;
+
+    return `
+    // [Node: ${ctx.node.name}] Code Execution
+    ${ctx.variableName} = await (async () => {
+      const currentItems = ${prevVar} || inputItems;${execution}
     })();
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
