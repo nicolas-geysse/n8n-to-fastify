@@ -96,6 +96,163 @@
     };
   }
 
+  // src/compiler/polling-loops.ts
+  var waitType = "n8n-nodes-base.wait";
+  var allowedTypes = new Set(["if", "switch", "wait", "httpRequest", "code", "set"].map((type) => "n8n-nodes-base." + type));
+  function readMainEdges(nodes, connections) {
+    const edges = [];
+    for (const [source, outputs] of Object.entries(connections)) {
+      if (!nodes.has(source) || !Array.isArray(outputs?.main))
+        continue;
+      outputs.main.forEach((targets, output) => {
+        if (!Array.isArray(targets))
+          return;
+        for (const target of targets) {
+          if (target && nodes.has(target.node)) {
+            edges.push({ source, output, target: target.node, input: target.index ?? 0 });
+          }
+        }
+      });
+    }
+    return edges;
+  }
+  function cyclicComponents(nodes, outgoing) {
+    const indices = new Map;
+    const low = new Map;
+    const stack = [];
+    const onStack = new Set;
+    const result = [];
+    function visit(node) {
+      const index = indices.size;
+      indices.set(node, index);
+      low.set(node, index);
+      stack.push(node);
+      onStack.add(node);
+      for (const { target } of outgoing.get(node) ?? []) {
+        if (!indices.has(target)) {
+          visit(target);
+          low.set(node, Math.min(low.get(node), low.get(target)));
+        } else if (onStack.has(target)) {
+          low.set(node, Math.min(low.get(node), indices.get(target)));
+        }
+      }
+      if (low.get(node) !== index)
+        return;
+      const component = [];
+      let member;
+      do {
+        member = stack.pop();
+        onStack.delete(member);
+        component.push(member);
+      } while (member !== node);
+      if (component.length > 1 || outgoing.get(node)?.some((edge) => edge.target === node)) {
+        result.push(component);
+      }
+    }
+    for (const node of nodes) {
+      if (!indices.has(node))
+        visit(node);
+    }
+    return result;
+  }
+  function findPollingLoops(nodes, connections) {
+    const byName = new Map(nodes.map((node) => [node.name, node]));
+    const edges = readMainEdges(byName, connections);
+    const outgoing = new Map;
+    const incoming = new Map;
+    for (const edge of edges) {
+      if (!outgoing.has(edge.source))
+        outgoing.set(edge.source, []);
+      if (!incoming.has(edge.target))
+        incoming.set(edge.target, []);
+      outgoing.get(edge.source).push(edge);
+      incoming.get(edge.target).push(edge);
+    }
+    return cyclicComponents(byName.keys(), outgoing).map((component) => {
+      const loop = planLoop(component, byName, outgoing, incoming);
+      if (!loop) {
+        throw new Error("[n8n-to-fastify] Cyclic dependency detected. Only single-entry polling loops " + "with a timed Wait and one IF or Switch retry output are supported. Nodes: " + component.slice().sort().map((node) => JSON.stringify(node)).join(", "));
+      }
+      return loop;
+    });
+  }
+  function projectPollingSchedule(nodes, connections, loops) {
+    const entries = new Map(loops.flatMap((loop) => loop.nodes.map((node) => [node, loop.entry])));
+    const projected = Object.create(null);
+    for (const edge of readMainEdges(new Map(nodes.map((node) => [node.name, node])), connections)) {
+      const source = entries.get(edge.source) ?? edge.source;
+      const target = entries.get(edge.target) ?? edge.target;
+      if (source === target)
+        continue;
+      const { main } = projected[source] ??= { main: [[]] };
+      main[0].push({ node: target, type: "main", index: 0 });
+    }
+    return { nodes: nodes.filter((node) => (entries.get(node.name) ?? node.name) === node.name), connections: projected };
+  }
+  function planLoop(component, nodes, outgoing, incoming) {
+    const members = new Set(component);
+    const definitions = component.map((name) => nodes.get(name));
+    if (definitions.some((node) => !allowedTypes.has(node.type) || node.disabled))
+      return;
+    const decisions = definitions.filter((node) => node.type === "n8n-nodes-base.if" || node.type === "n8n-nodes-base.switch");
+    const waits = definitions.filter((node) => node.type === waitType);
+    if (decisions.length !== 1 || waits.length !== 1 || (waits[0].parameters?.resume ?? "timeInterval") !== "timeInterval")
+      return;
+    if (decisions[0].parameters?.options?.allMatchingOutputs)
+      return;
+    const decision = decisions[0].name;
+    const entries = component.flatMap((node) => (incoming.get(node) ?? []).filter((edge) => !members.has(edge.source)));
+    if (entries.length !== 1 || entries[0].input !== 0)
+      return;
+    const entry = entries[0].target;
+    const order = [entry];
+    const exits = [];
+    let backEdge;
+    let repeatPort;
+    for (let index = 0;index < component.length; index++) {
+      const node = order[index];
+      const all = outgoing.get(node) ?? [];
+      const next = all.filter((edge) => members.has(edge.target));
+      if (next.length !== 1 || next[0].input !== 0 || node !== decision && next[0].output !== 0)
+        return;
+      const external = all.filter((edge) => !members.has(edge.target));
+      if (external.length > 0 && (node !== decision || external.some((edge) => edge.output === next[0].output)))
+        return;
+      exits.push(...external);
+      if (node === decision)
+        repeatPort = next[0].output;
+      if (next[0].target === entry) {
+        if (index !== component.length - 1)
+          return;
+        backEdge = next[0];
+      } else {
+        order.push(next[0].target);
+      }
+    }
+    if (!backEdge || repeatPort === undefined || exits.length === 0)
+      return;
+    const terminalExits = [];
+    const exitPorts = new Set;
+    for (const edge of exits) {
+      const target = nodes.get(edge.target);
+      if (target.type === "n8n-nodes-base.stopAndError" && !target.disabled) {
+        if (edge.input !== 0 || incoming.get(edge.target)?.length !== 1 || outgoing.get(edge.target)?.length)
+          return;
+        terminalExits.push({ output: edge.output, target: edge.target });
+      }
+      exitPorts.add(edge.output);
+    }
+    return {
+      entry,
+      nodes: order,
+      decision,
+      repeatPort,
+      backEdge: { source: backEdge.source, output: backEdge.output },
+      exitPorts: [...exitPorts].sort((a, b) => a - b),
+      terminalExits
+    };
+  }
+
   // src/compiler/core-parser.ts
   class CoreWorkflowParser {
     static parseWorkflow(json, fallbackName, relativePath) {
@@ -148,7 +305,11 @@
         }
         node.ancestorTriggers = Array.from(ancestorTriggers);
       });
-      const orderedNodes = this.topologicalSort(nodes, connections);
+      const pollingLoops = findPollingLoops(nodes, connections);
+      const schedule = pollingLoops.length ? projectPollingSchedule(nodes, connections, pollingLoops) : { nodes, connections };
+      const entryGroups = new Map(pollingLoops.map((loop) => [loop.entry, loop.nodes]));
+      const nodeByName = new Map(nodes.map((node) => [node.name, node]));
+      const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections).flatMap((node) => entryGroups.get(node.name)?.map((name) => nodeByName.get(name)) ?? [node]);
       return {
         id,
         name,
@@ -157,7 +318,8 @@
         nodes,
         connections,
         orderedNodes,
-        triggers
+        triggers,
+        pollingLoops
       };
     }
     static topologicalSort(nodes, connections) {
@@ -1260,6 +1422,41 @@ ${legacyBinding}${execution}
     }
   }
 
+  // src/compiler/polling-code.ts
+  function emitPollingLoop(loop, nodes, mapNode, wrapNode) {
+    const { entry, terminalExits, repeatPort, ...runtimePlan } = loop;
+    const entryNode = nodes.get(entry);
+    const initial = entryNode.incomingConnections.find((connection) => !loop.nodes.includes(connection.sourceNode));
+    const inputBatches = "ctx.getNodeOutputBatches(" + JSON.stringify(initial.sourceNode) + ", " + initial.outputIndex + ")";
+    let body = "";
+    for (const [index, name] of loop.nodes.entries()) {
+      const node = nodes.get(name);
+      if (index === 0) {
+        body += wrapNode(node, "true", mapNode(node, "pollingItems"));
+      } else {
+        const incoming = node.incomingConnections.find((connection) => connection.sourceNode === loop.nodes[index - 1]);
+        const input = "pollingInput_" + index;
+        body += "    const " + input + " = ctx.getNodeOutput(" + JSON.stringify(incoming.sourceNode) + ", " + incoming.outputIndex + `);
+`;
+        body += wrapNode(node, input + "?.length", mapNode(node, input));
+      }
+      if (name !== loop.decision)
+        continue;
+      for (const [exitIndex, exit] of terminalExits.entries()) {
+        const terminal = nodes.get(exit.target);
+        const output = "pollingTerminal_" + exitIndex;
+        body += "    const " + output + " = ctx.getNodeOutput(" + JSON.stringify(name) + ", " + exit.output + `);
+`;
+        body += wrapNode(terminal, output + "?.length", mapNode(terminal, output));
+      }
+      body += "    if (ctx.getNodeOutput(" + JSON.stringify(name) + ", " + repeatPort + `)?.length) assertCanRetry();
+`;
+    }
+    return "  await ctx.runPollingLoop(" + JSON.stringify(runtimePlan) + ", " + inputBatches + `, async (pollingItems, assertCanRetry) => {
+` + body + `  });
+`;
+  }
+
   // src/compiler/disabled-node.ts
   function getDisabledNodeMode(node, workflow) {
     if (!node.disabled || workflow.triggers.includes(node) || node.type.toLowerCase().endsWith("trigger"))
@@ -1353,6 +1550,22 @@ const DateTime = {
       const hasRabbitMqTrigger = triggers.some((node) => node.type === rabbitMqTriggerType);
       const disabledModes = new Map(wf.orderedNodes.map((node) => [node, getDisabledNodeMode(node, wf)]));
       const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n) && disabledModes.get(n) !== "skip");
+      const loops = wf.pollingLoops ?? [];
+      const loopsByMember = new Map(loops.flatMap((loop) => loop.nodes.map((name) => [name, loop])));
+      const terminalNames = new Set(loops.flatMap((loop) => loop.terminalExits.map((exit) => exit.target)));
+      const mapNode = (node, previousVariableName) => {
+        const varName = nodeVarMap.get(node.name);
+        return disabledModes.get(node) === "passthrough" ? `
+    ${varName} = ${previousVariableName} || [];
+    item = ${varName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});` : NodeMappers.mapNode({
+          node,
+          workflowName: wf.name,
+          variableName: varName,
+          previousVariableName,
+          legacyNodePorts: legacyNodes.has(node) ? collectLegacyNodePorts(node, nodesByName) : undefined
+        });
+      };
       triggers.forEach((node) => {
         const index = wf.orderedNodes.indexOf(node);
         const varName = nodeVarMap.get(node.name);
@@ -1376,25 +1589,24 @@ ctx.setNodeOutput(${nodeName}, inputItems);`;
         const varName = nodeVarMap.get(node.name);
         declCode += `  let ${varName}: any = inputItems;
 `;
+        const loop = loopsByMember.get(node.name);
+        if (loop) {
+          if (node.name === loop.entry) {
+            bodyCode += emitPollingLoop(loop, nodesByName, mapNode, (member, condition, code) => this.generateNodeBlock(wf.id, member, condition, code));
+          }
+          return;
+        }
+        if (terminalNames.has(node.name))
+          return;
         let branchCheckStr = "true";
         const incoming = node.incomingConnections ?? [];
-        const passesInput = disabledModes.get(node) === "passthrough";
-        const runPerIncomingBatch = incoming.length > 0 && (passesInput || !node.type.includes("merge"));
+        const runPerIncomingBatch = incoming.length > 0 && (disabledModes.get(node) === "passthrough" || !node.type.includes("merge"));
         if (incoming.length > 0) {
           const branchChecks = incoming.map((conn) => `ctx.isBranchActive(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`);
           branchCheckStr = `(${branchChecks.join(" || ")})`;
         }
         const prevExpr = runPerIncomingBatch ? "incomingItems" : "inputItems";
-        let nodeCode = passesInput ? `
-    ${varName} = ${prevExpr} || [];
-    item = ${varName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});` : NodeMappers.mapNode({
-          node,
-          workflowName: wf.name,
-          variableName: varName,
-          previousVariableName: prevExpr,
-          legacyNodePorts: legacyNodes.has(node) ? collectLegacyNodePorts(node, nodesByName) : undefined
-        });
+        let nodeCode = mapNode(node, prevExpr);
         if (runPerIncomingBatch) {
           const batches = incoming.map((conn) => `ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`);
           nodeCode = `await ctx.runNodeBatches(${JSON.stringify(node.name)}, [${batches.join(", ")}].flat(), async (incomingItems) => {

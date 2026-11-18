@@ -8,6 +8,13 @@ export interface NodeAccessor {
   all: () => N8nItem[];
 }
 
+interface PollingRun {
+  nodes: string[];
+  decision: string;
+  backEdge: { source: string; output: number };
+  exitPorts: number[];
+}
+
 /**
  * Runtime execution context for a single compiled workflow invocation.
  * Tracks node outputs, active conditional branches (IF/Switch), and webhook reply state.
@@ -86,10 +93,7 @@ export class WorkflowContext {
     const byPort = new Map<number, N8nItem[][]>();
     const all: N8nItem[][] = [];
     for (const input of batches) {
-      this.nodeOutputs.delete(nodeName);
-      this.outputPorts.delete(nodeName);
-      this.outputBatches.delete(nodeName);
-      this.activeBranches.delete(nodeName);
+      this.clearNodeOutput(nodeName);
       await run(input);
 
       const items = this.nodeOutputs.get(nodeName);
@@ -105,6 +109,57 @@ export class WorkflowContext {
         portBatches.push(output);
       }
     }
+    this.setBatchedOutputs(nodeName, byPort, all);
+  }
+
+  public async runPollingLoop(
+    plan: PollingRun,
+    initialBatches: N8nItem[][],
+    runAttempt: (items: N8nItem[], assertCanRetry: () => void) => Promise<void>,
+  ): Promise<void> {
+    if (!initialBatches.some(batch => batch.length)) return;
+    const limit = Number(process.env.N8N_TO_FASTIFY_POLL_MAX_ATTEMPTS ?? 100);
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new Error('N8N_TO_FASTIFY_POLL_MAX_ATTEMPTS must be a positive integer');
+    }
+
+    const exits = new Map<number, N8nItem[][]>();
+    const completed: N8nItem[][] = [];
+    for (const initial of initialBatches) {
+      let pending = initial;
+      let attempt = 0;
+      const assertCanRetry = () => {
+        if (attempt >= limit) throw new Error(`Polling loop exceeded its limit of ${limit} attempts`);
+      };
+      while (pending.length > 0) {
+        assertCanRetry();
+        attempt++;
+        for (const nodeName of plan.nodes) {
+          this.clearNodeOutput(nodeName);
+          this.executedNodes.delete(nodeName);
+        }
+        await runAttempt(pending, assertCanRetry);
+        for (const port of plan.exitPorts) {
+          const items = this.getNodeOutput(plan.decision, port);
+          if (!items?.length) continue;
+          if (!exits.has(port)) exits.set(port, []);
+          exits.get(port)!.push(items);
+          completed.push(items);
+        }
+        pending = this.getNodeOutput(plan.backEdge.source, plan.backEdge.output) ?? [];
+      }
+    }
+    this.setBatchedOutputs(plan.decision, exits, completed);
+  }
+
+  private clearNodeOutput(nodeName: string): void {
+    this.nodeOutputs.delete(nodeName);
+    this.outputPorts.delete(nodeName);
+    this.outputBatches.delete(nodeName);
+    this.activeBranches.delete(nodeName);
+  }
+
+  private setBatchedOutputs(nodeName: string, byPort: Map<number, N8nItem[][]>, all: N8nItem[][]): void {
     this.setNodeOutputs(nodeName, [...byPort].map(([port, runs]) => [port, runs.flat()]), all.flat());
     this.outputBatches.set(nodeName, byPort);
   }

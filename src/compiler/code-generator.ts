@@ -1,5 +1,6 @@
 import { N8nNode, ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
+import { emitPollingLoop } from './polling-code';
 import { getDisabledNodeMode } from './disabled-node';
 import { isPositionMerge } from './mappers/position-merge';
 import { collectLegacyNodePorts, usesLegacyNodeReferences } from './mappers/code-context';
@@ -92,6 +93,24 @@ const DateTime = {
     const hasRabbitMqTrigger = triggers.some(node => node.type === rabbitMqTriggerType);
     const disabledModes = new Map(wf.orderedNodes.map(node => [node, getDisabledNodeMode(node, wf)]));
     const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n) && disabledModes.get(n) !== 'skip');
+    const loops = wf.pollingLoops ?? [];
+    const loopsByMember = new Map(loops.flatMap(loop => loop.nodes.map(name => [name, loop] as const)));
+    const terminalNames = new Set(loops.flatMap(loop => loop.terminalExits.map(exit => exit.target)));
+    const mapNode = (node: N8nNode, previousVariableName: string) => {
+      const varName = nodeVarMap.get(node.name)!;
+      return disabledModes.get(node) === 'passthrough'
+        ? `
+    ${varName} = ${previousVariableName} || [];
+    item = ${varName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});`
+        : NodeMappers.mapNode({
+            node,
+            workflowName: wf.name,
+            variableName: varName,
+            previousVariableName,
+            legacyNodePorts: legacyNodes.has(node) ? collectLegacyNodePorts(node, nodesByName) : undefined,
+          });
+    };
 
     triggers.forEach((node) => {
       const index = wf.orderedNodes.indexOf(node);
@@ -114,10 +133,21 @@ const DateTime = {
       const varName = nodeVarMap.get(node.name)!;
       declCode += `  let ${varName}: any = inputItems;\n`;
 
+      const loop = loopsByMember.get(node.name);
+      if (loop) {
+        if (node.name === loop.entry) {
+          bodyCode += emitPollingLoop(loop, nodesByName, mapNode, (member, condition, code) =>
+            this.generateNodeBlock(wf.id, member, condition, code)
+          );
+        }
+        return;
+      }
+      if (terminalNames.has(node.name)) return;
+
       let branchCheckStr = 'true';
       const incoming = node.incomingConnections ?? [];
-      const passesInput = disabledModes.get(node) === 'passthrough';
-      const runPerIncomingBatch = incoming.length > 0 && (passesInput || !node.type.includes('merge'));
+      const runPerIncomingBatch = incoming.length > 0 &&
+        (disabledModes.get(node) === 'passthrough' || !node.type.includes('merge'));
 
       if (incoming.length > 0) {
         const branchChecks = incoming.map(
@@ -127,16 +157,7 @@ const DateTime = {
       }
 
       const prevExpr = runPerIncomingBatch ? 'incomingItems' : 'inputItems';
-      let nodeCode = passesInput ? `
-    ${varName} = ${prevExpr} || [];
-    item = ${varName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});` : NodeMappers.mapNode({
-        node,
-        workflowName: wf.name,
-        variableName: varName,
-        previousVariableName: prevExpr,
-        legacyNodePorts: legacyNodes.has(node) ? collectLegacyNodePorts(node, nodesByName) : undefined,
-      });
+      let nodeCode = mapNode(node, prevExpr);
       if (runPerIncomingBatch) {
         const batches = incoming.map(
           conn => `ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`
