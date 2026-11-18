@@ -1,8 +1,11 @@
 import type { ParsedWorkflow } from './core-parser';
 import { getPositionMergeIssue, isPositionMerge } from './mappers/position-merge';
 import { getLegacyNodeReferenceIssue } from './mappers/code-context';
+import { getS3DownloadIssue, s3NodeType } from './mappers/s3';
+import { getMultipartIssue, usesMultipartBody } from './mappers/http-request';
 
 const supportedNodeTypes = new Set([
+  s3NodeType,
   ...[
     'webhook',
     'respondToWebhook',
@@ -58,12 +61,16 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     const params = node.parameters ?? {};
     const codeIssue = getLegacyNodeReferenceIssue(node);
     if (codeIssue) report(node.name, codeIssue);
+    if (node.type === s3NodeType) {
+      const issue = getS3DownloadIssue(node);
+      if (issue) report(node.name, issue);
+    }
     if (node.type === 'n8n-nodes-base.httpRequest') {
-      if (params.sendBody && params.contentType && params.contentType !== 'json') {
-        report(node.name, 'only JSON request bodies are supported');
-      }
-      if (params.sendHeaders && params.specifyHeaders === 'json') {
-        report(node.name, 'JSON header configuration is ignored');
+      if (usesMultipartBody(params)) {
+        const issue = getMultipartIssue(params);
+        if (issue) report(node.name, issue);
+      } else if (params.sendBody && params.contentType && params.contentType !== 'json') {
+        report(node.name, 'only JSON and multipart request bodies are supported');
       }
       if (params.authentication && params.authentication !== 'none') {
         report(node.name, 'configured HTTP Request authentication is ignored');

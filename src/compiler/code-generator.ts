@@ -2,6 +2,8 @@ import { ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
 import { isPositionMerge } from './mappers/position-merge';
 import { collectLegacyNodePorts, usesLegacyNodeReferences } from './mappers/code-context';
+import { s3NodeType } from './mappers/s3';
+import { usesJsonHeaders, usesMultipartBody } from './mappers/http-request';
 
 export class CodeGenerator {
   static sanitizeIdentifier(str: string): string {
@@ -29,11 +31,17 @@ export class CodeGenerator {
       ? `const legacyNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map(node => node.name))});\n`
       : '';
     const nodesByName = new Map(wf.nodes.map(node => [node.name, node]));
+    const s3Import = wf.nodes.some(node => node.type === s3NodeType)
+      ? `import { downloadS3Files } from '${runtimePrefix}/s3';\n`
+      : '';
+    const httpRequestImport = wf.nodes.some(node =>
+      node.type.includes('httpRequest') && (usesMultipartBody(node.parameters) || usesJsonHeaders(node.parameters))
+    ) ? `import { createRequestForm, parseRequestHeaders } from '${runtimePrefix}/http-request';\n` : '';
 
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}
+${positionMergeImport}${legacyImport}${s3Import}${httpRequestImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({

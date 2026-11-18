@@ -93,17 +93,46 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 | **Filter** | Deterministic branch tracking |
 | **Switch** | Routes each item by rule or output-index expression, with configurable fallback in rules mode |
 | **Set / Edit Fields** | Object mutation with dot-notation & `keepOnlySet` |
-| **HTTP Request** | Native `fetch()` with headers, JSON body, and error handling |
+| **HTTP Request** | Native `fetch()` with JSON headers and JSON or multipart form bodies |
 | **Aggregate** | In-memory item aggregation |
 | **Split Out** | Expands nested arrays into individual `N8nItem[]` items |
 | **Merge** | Appends branches or combines items by position across up to ten destination ports |
 | **PostgreSQL** | Parameterized SQL execution via `DATABASE_URL` |
+| **S3** | Downloads files into binary items from an S3-compatible endpoint |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | Non-blocking async `setTimeout` promise |
 
 Legacy `$node["Node name"]` references in a Code node running once for all
 items read the first item from the connected output. Use `.json` (or its
 legacy `.data` alias) for its JSON and `.binary` for file metadata.
+
+---
+
+## S3 downloads
+
+The compiler supports File / Download from S3 node v1 in n8n 1.123.5.
+The generated service reads `S3_ENDPOINT`, `AWS_ACCESS_KEY_ID`,
+and `AWS_SECRET_ACCESS_KEY` at runtime. It also accepts `AWS_REGION`
+(defaults to `us-east-1`) and `AWS_SESSION_TOKEN`. Path-style addressing
+is enabled by default. Set `S3_FORCE_PATH_STYLE=false` for virtual-hosted
+addressing.
+
+The service downloads each object in order and stores its bytes as
+base64 under the configured binary field, `data` by default. The input
+JSON and other binary fields are preserved.
+
+---
+
+## HTTP Request multipart
+
+HTTP Request supports multipart text fields and n8n binary-file fields
+for POST, PUT and PATCH. A binary field reads the selected input binary
+property, which must contain inline base64 data. Its file name and MIME
+type are used for the uploaded file. The transport adds the multipart
+boundary and calculates the body length.
+
+With Send Headers enabled, JSON header configuration may evaluate to
+a JSON string or an object of header names and values.
 
 ---
 

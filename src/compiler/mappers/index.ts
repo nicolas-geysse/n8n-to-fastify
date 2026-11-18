@@ -2,6 +2,8 @@ import { N8nNode } from '../parser';
 import { ExpressionParser } from '../expression-parser';
 import { isPositionMerge, mapPositionMerge } from './position-merge';
 import { getLegacyNodeReferenceIssue } from './code-context';
+import { mapS3Download, s3NodeType } from './s3';
+import { generateMultipartBody, getMultipartIssue, usesJsonHeaders, usesMultipartBody } from './http-request';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -17,6 +19,10 @@ export interface NodeMapperContext {
 export class NodeMappers {
   static mapNode(ctx: NodeMapperContext): string {
     const type = ctx.node.type;
+
+    if (type === s3NodeType) {
+      return mapS3Download(ctx);
+    }
 
     if (type.includes('respondToWebhook')) {
       return this.mapRespondToWebhookNode(ctx);
@@ -382,9 +388,13 @@ ${legacyBinding}      const result = await (async () => {
     const prevVar = ctx.previousVariableName || 'inputItems';
     const method = (params.method || 'GET').toUpperCase();
     const urlExpr = ExpressionParser.parse(params.url || '');
+    const multipart = usesMultipartBody(params);
+    const jsonHeaders = usesJsonHeaders(params);
 
     let headersObj = '{}';
-    if (params.headerParameters?.parameters && Array.isArray(params.headerParameters.parameters)) {
+    if (jsonHeaders) {
+      headersObj = `parseRequestHeaders(${ExpressionParser.parse(params.jsonHeaders ?? '{}')})`;
+    } else if (params.headerParameters?.parameters && Array.isArray(params.headerParameters.parameters)) {
       const pairs = params.headerParameters.parameters
         .filter((p: any) => p.name)
         .map((p: any) => `${JSON.stringify(p.name)}: ${ExpressionParser.parse(p.value)}`);
@@ -392,7 +402,11 @@ ${legacyBinding}      const result = await (async () => {
     }
 
     let bodySnippet = 'undefined';
-    if (['POST', 'PUT', 'PATCH'].includes(method)) {
+    if (multipart) {
+      const issue = getMultipartIssue(params);
+      if (issue) throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
+      bodySnippet = generateMultipartBody(params);
+    } else if (['POST', 'PUT', 'PATCH'].includes(method)) {
       if (params.jsonBody) {
         bodySnippet = `JSON.stringify(${ExpressionParser.parse(params.jsonBody)})`;
       } else if (params.bodyParameters?.parameters && Array.isArray(params.bodyParameters.parameters)) {
@@ -403,17 +417,28 @@ ${legacyBinding}      const result = await (async () => {
       }
     }
 
+    let headersSnippet = `const reqHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...${headersObj} };`;
+    if (multipart) {
+      const formHeaders = jsonHeaders ? headersObj : `new Headers(${headersObj})`;
+      headersSnippet = `const reqHeaders = ${formHeaders};
+      reqHeaders.delete('content-type');
+      reqHeaders.delete('content-length');`;
+    } else if (jsonHeaders) {
+      headersSnippet = `const reqHeaders = ${headersObj};
+      if (!reqHeaders.has('content-type')) reqHeaders.set('content-type', 'application/json');`;
+    }
+
     return `
     // [Node: ${ctx.node.name}] Native HTTP Request (${method})
     ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
       const item = currentItem;
       const targetUrl = ${urlExpr};
-      const reqHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...${headersObj} };
+      ${headersSnippet}
       const reqBody = ${bodySnippet};
       const res = await fetch(targetUrl, {
         method: ${JSON.stringify(method)},
         headers: reqHeaders,
-        ...(reqBody !== undefined ? { body: typeof reqBody === 'string' ? reqBody : JSON.stringify(reqBody) } : {})
+        ...(reqBody !== undefined ? { body: reqBody } : {})
       });
       const text = await res.text();
       let data: any;
