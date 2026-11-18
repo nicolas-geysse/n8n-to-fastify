@@ -88,6 +88,7 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 | **Webhook** | Native Fastify route handler (`GET`, `POST`, `PUT`, `DELETE`, `ALL`) |
 | **Respond to Webhook** | `reply.code(status).send(payload)` with JSON/Text support |
 | **Code / Function** | Native async JavaScript execution with `$input`, `$json`, and `$('Node')` bindings |
+| **Disabled nodes** | Skips detached nodes and passes a single main input through to output 0 |
 | **Execute Workflow** | Direct in-memory function invocation via `WorkflowRegistry` |
 | **IF / Filter** | Deterministic branch tracking (`outputIndex 0` vs `1`) |
 | **Switch** | Multi-branch router matching rules + fallback |

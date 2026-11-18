@@ -1,5 +1,6 @@
 import { ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
+import { getDisabledNodeMode } from './disabled-node';
 
 export class CodeGenerator {
   static sanitizeIdentifier(str: string): string {
@@ -42,7 +43,8 @@ const DateTime = {
     const triggers = wf.orderedNodes.filter(
       (n) => n.type.includes('webhook') || n.type.includes('trigger') || n.type.includes('cron')
     );
-    const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n));
+    const disabledModes = new Map(wf.orderedNodes.map(node => [node, getDisabledNodeMode(node, wf)]));
+    const nonTriggers = wf.orderedNodes.filter(node => !triggers.includes(node) && disabledModes.get(node) !== 'skip');
 
     triggers.forEach((node) => {
       const index = wf.orderedNodes.indexOf(node);
@@ -83,7 +85,10 @@ const DateTime = {
         branchCheckStr = `(${branchChecks.join(' || ')})`;
       }
 
-      const nodeCode = NodeMappers.mapNode({
+      const nodeCode = disabledModes.get(node) === 'passthrough' ? `
+    ${varName} = ${actualPrevVar} || [];
+    item = ${varName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});` : NodeMappers.mapNode({
         node,
         workflowName: wf.name,
         variableName: varName,
@@ -104,7 +109,7 @@ const DateTime = {
       prevVarName = node.name;
     });
 
-    const lastNodeName = wf.orderedNodes[wf.orderedNodes.length - 1]?.name;
+    const lastNodeName = wf.orderedNodes.filter(node => disabledModes.get(node) !== 'skip').at(-1)?.name;
     const returnItemsExpr = lastNodeName
       ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])`
       : `inputItems`;
