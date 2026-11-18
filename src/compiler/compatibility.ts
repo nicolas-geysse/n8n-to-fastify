@@ -1,7 +1,9 @@
 import type { ParsedWorkflow } from './core-parser';
 import { getWaitIntervalIssue, waitNodeType } from './mappers/wait-interval';
+import { getStopAndErrorIssue, stopAndErrorType } from './mappers/stop-and-error';
 
 const supportedNodeTypes = new Set([
+  stopAndErrorType,
   ...[
     'webhook',
     'respondToWebhook',
@@ -57,6 +59,10 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     const params = node.parameters ?? {};
     if (node.type === waitNodeType) {
       const issue = getWaitIntervalIssue(node);
+      if (issue) report(node.name, issue);
+    }
+    if (node.type === stopAndErrorType) {
+      const issue = getStopAndErrorIssue(node);
       if (issue) report(node.name, issue);
     }
     if (node.type === 'n8n-nodes-base.httpRequest') {

@@ -1,6 +1,7 @@
 import { N8nNode } from '../parser';
 import { ExpressionParser } from '../expression-parser';
 import { mapWaitInterval, waitNodeType } from './wait-interval';
+import { mapStopAndError, stopAndErrorType } from './stop-and-error';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -15,6 +16,8 @@ export interface NodeMapperContext {
 export class NodeMappers {
   static mapNode(ctx: NodeMapperContext): string {
     const type = ctx.node.type;
+
+    if (type === stopAndErrorType) return mapStopAndError(ctx);
 
     if (type.includes('respondToWebhook')) {
       return this.mapRespondToWebhookNode(ctx);

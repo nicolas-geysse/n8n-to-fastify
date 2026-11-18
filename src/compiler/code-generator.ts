@@ -1,6 +1,7 @@
 import { ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
 import { waitNodeType } from './mappers/wait-interval';
+import { stopAndErrorType } from './mappers/stop-and-error';
 
 export class CodeGenerator {
   static sanitizeIdentifier(str: string): string {
@@ -20,11 +21,14 @@ export class CodeGenerator {
     const waitImport = wf.nodes.some(node => node.type === waitNodeType)
       ? `import { waitForInterval } from '${runtimePrefix}/wait-interval';\n`
       : '';
+    const stopAndErrorImport = wf.nodes.some(node => node.type === stopAndErrorType)
+      ? `import { createWorkflowStopError } from '${runtimePrefix}/stop-and-error';\n`
+      : '';
 
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${waitImport}
+${waitImport}${stopAndErrorImport}
 
 const DateTime = {
   now: () => ({
