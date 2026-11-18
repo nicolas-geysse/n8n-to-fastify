@@ -874,7 +874,7 @@ try {
 }
 `;
     }
-    static generateOutputPackageJson() {
+    static generateOutputPackageJson(dependencies = {}) {
       return JSON.stringify({
         name: "compiled-n8n-service",
         version: "1.0.0",
@@ -885,7 +885,8 @@ try {
         },
         dependencies: {
           "@fastify/cors": "^9.0.1",
-          fastify: "^4.28.1"
+          fastify: "^4.28.1",
+          ...dependencies
         }
       }, null, 2);
     }

@@ -108,6 +108,25 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 
 ---
 
+## 📦 Code Node Dependencies
+
+`Code` nodes can import built-in Node.js modules directly (e.g. `require('node:path')`). For third-party npm packages, pass a JSON file mapping package names to versions via `--dependencies`:
+
+```json
+{ "@supabase/supabase-js": "^2.0.0" }
+```
+
+```bash
+bun run compile ./workflows --out ./compiled-service --dependencies ./workflow-dependencies.json
+cd compiled-service
+bun install
+bun run start
+```
+
+The compiler merges these entries into the generated `package.json`. Declare every third-party package the workflow may load, including packages resolved dynamically via `require()` or `import()`.
+
+---
+
 ## 🧪 Tests & Reproducible Benchmark
 
 ```bash

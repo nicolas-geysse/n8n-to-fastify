@@ -12,6 +12,22 @@ const __dirname = path.dirname(__filename);
 
 const program = new Command();
 
+function readDependencies(filePath: string): Record<string, string> {
+  const dependencies: unknown = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  if (typeof dependencies !== 'object' || dependencies === null || Array.isArray(dependencies)) {
+    throw new Error(`Expected a JSON object mapping npm package names to versions in '${filePath}'.`);
+  }
+
+  for (const [name, version] of Object.entries(dependencies)) {
+    if (!/^(?:@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*$/i.test(name) ||
+        typeof version !== 'string' || !version.trim()) {
+      throw new Error(`Invalid npm dependency entry '${name}' in '${filePath}'.`);
+    }
+  }
+
+  return dependencies as Record<string, string>;
+}
+
 program
   .name('n8n-to-fastify')
   .description('Ahead-Of-Time (AOT) compiler that transpiles n8n workflows into bare-metal Fastify microservices')
@@ -22,7 +38,16 @@ program
   .description('Compile a single workflow.json or a directory of workflows into a standalone Fastify project')
   .argument('<input>', 'Path to a workflow .json file or directory of workflows')
   .option('-o, --out <dir>', 'Output directory for the generated microservice', './compiled-service')
-  .action((input: string, options: { out: string }) => {
+  .option('--dependencies <file>', 'JSON file mapping npm package names to versions for the generated service')
+  .action((input: string, options: { out: string; dependencies?: string }) => {
+    let dependencies: Record<string, string> | undefined;
+    try {
+      dependencies = options.dependencies ? readDependencies(options.dependencies) : undefined;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      program.error(`[n8n-to-fastify] Cannot load dependencies: ${message}`);
+    }
+
     const startTime = performance.now();
     const outDir = path.resolve(options.out);
 
@@ -69,7 +94,7 @@ program
     fs.writeFileSync(path.join(outDir, 'server.ts'), RouteGenerator.generateServerEntry(), 'utf8');
     fs.writeFileSync(
       path.join(outDir, 'package.json'),
-      RouteGenerator.generateOutputPackageJson(),
+      RouteGenerator.generateOutputPackageJson(dependencies),
       'utf8'
     );
 
