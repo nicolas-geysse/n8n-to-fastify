@@ -11,6 +11,7 @@ export function createLegacyNodeReferences(
   context: WorkflowContext,
   nodeNames: ReadonlySet<string>,
   upstreamPorts: Array<[string, number]>,
+  itemIndex = 0,
 ): Record<string, LegacyNodeReference> {
   const ports = new Map(upstreamPorts);
   return new Proxy(Object.create(null), {
@@ -22,8 +23,10 @@ export function createLegacyNodeReferences(
         if (!context.hasExecutedNode(name)) throw new Error('Referenced node has not executed');
         const port = ports.get(name);
         if (port === undefined) throw new Error('Referenced node is not connected to the Code node');
-        const item = context.getNodeOutput(name, port)?.[0];
-        if (!item) throw new Error('Referenced node output has no items');
+        const items = context.getNodeOutput(name, port);
+        if (!items?.length) throw new Error('Referenced node output has no items');
+        const item = items[itemIndex];
+        if (!item) throw new Error('Referenced node output has no item at the current index');
         return item;
       };
 

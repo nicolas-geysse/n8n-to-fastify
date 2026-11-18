@@ -1,6 +1,7 @@
 import type { ParsedWorkflow } from './core-parser';
 import { getPositionMergeIssue, isPositionMerge } from './mappers/position-merge';
 import { getLegacyNodeReferenceIssue } from './mappers/code-context';
+import { getRawEditFieldsIssue } from './mappers/raw-edit-fields';
 
 const supportedNodeTypes = new Set([
   ...[
@@ -69,9 +70,8 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
         report(node.name, 'configured HTTP Request authentication is ignored');
       }
     }
-    if (node.type === 'n8n-nodes-base.set' && params.mode === 'raw') {
-      report(node.name, 'raw JSON mode is ignored');
-    }
+    const rawIssue = getRawEditFieldsIssue(node);
+    if (rawIssue) report(node.name, rawIssue);
     if (isPositionMerge(node)) {
       const issue = getPositionMergeIssue(node);
       if (issue) report(node.name, issue);

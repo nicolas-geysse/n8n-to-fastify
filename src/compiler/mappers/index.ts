@@ -2,6 +2,7 @@ import { N8nNode } from '../parser';
 import { ExpressionParser } from '../expression-parser';
 import { isPositionMerge, mapPositionMerge } from './position-merge';
 import { getLegacyNodeReferenceIssue } from './code-context';
+import { getRawEditFieldsIssue, isRawEditFields, mapRawEditFields } from './raw-edit-fields';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -47,6 +48,7 @@ export class NodeMappers {
     }
 
     if (type.includes('set')) {
+      if (isRawEditFields(ctx.node) && !getRawEditFieldsIssue(ctx.node)) return mapRawEditFields(ctx);
       return this.mapSetNode(ctx);
     }
 

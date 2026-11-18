@@ -92,7 +92,7 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 | **IF** | Routes each item to its true or false output |
 | **Filter** | Deterministic branch tracking |
 | **Switch** | Routes each item by rule or output-index expression, with configurable fallback in rules mode |
-| **Set / Edit Fields** | Object mutation with dot-notation & `keepOnlySet` |
+| **Set / Edit Fields** | Manual assignments and v3.4 JSON Output with fixed objects and expressions |
 | **HTTP Request** | Native `fetch()` with headers, JSON body, and error handling |
 | **Aggregate** | In-memory item aggregation |
 | **Split Out** | Expands nested arrays into individual `N8nItem[]` items |
