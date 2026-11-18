@@ -597,6 +597,68 @@
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
   }
 
+  // src/runtime/wait-interval.ts
+  var unitMilliseconds = {
+    seconds: 1000,
+    minutes: 60000,
+    hours: 3600000,
+    days: 86400000
+  };
+  function getWaitDelayMs(amount, unit) {
+    if (typeof unit !== "string" || !Object.hasOwn(unitMilliseconds, unit)) {
+      throw new Error("Wait unit must be seconds, minutes, hours, or days");
+    }
+    const numericAmount = typeof amount === "string" && amount.trim() ? Number(amount) : amount;
+    if (typeof numericAmount !== "number" || !Number.isFinite(numericAmount) || numericAmount < 0) {
+      throw new Error("Wait amount must be a finite nonnegative number");
+    }
+    const delay = numericAmount * unitMilliseconds[unit];
+    if (delay > Number.MAX_SAFE_INTEGER)
+      throw new Error("Wait interval is too large");
+    return delay;
+  }
+
+  // src/compiler/mappers/wait-interval.ts
+  var waitNodeType = "n8n-nodes-base.wait";
+  function intervalParameters(node) {
+    const params = node.parameters ?? {};
+    return {
+      amount: params.amount ?? (node.typeVersion === 1 ? 1 : 5),
+      unit: params.unit ?? (node.typeVersion === 1 ? "hours" : "seconds")
+    };
+  }
+  function isExpression(value) {
+    return typeof value === "string" && value.trimStart().startsWith("=") && value.includes("{{");
+  }
+  function getWaitIntervalIssue(node) {
+    const version = node.typeVersion ?? 1.1;
+    if (version !== 1 && version !== 1.1 || (node.parameters?.resume ?? "timeInterval") !== "timeInterval") {
+      return "Wait supports the After Time Interval mode on node versions 1 and 1.1";
+    }
+    const { amount, unit } = intervalParameters(node);
+    try {
+      getWaitDelayMs(isExpression(amount) ? 0 : amount, isExpression(unit) ? "seconds" : unit);
+    } catch (error) {
+      return error.message;
+    }
+  }
+  function mapWaitInterval(ctx) {
+    const issue = getWaitIntervalIssue(ctx.node);
+    if (issue)
+      throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
+    const { amount, unit } = intervalParameters(ctx.node);
+    const previous = ctx.previousVariableName ?? "inputItems";
+    return `
+    ${ctx.variableName} = ${previous} || inputItems;
+    if (${ctx.variableName}.length > 0) {
+      const inputItems: N8nItem[] = ${ctx.variableName};
+      const item = inputItems[0];
+      await waitForInterval(${ExpressionParser.parse(amount)}, ${ExpressionParser.parse(unit)});
+    }
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+  }
+
   // src/compiler/mappers/http-request.ts
   function usesMultipartBody(params) {
     return params?.sendBody === true && params.contentType === "multipart-form-data";
@@ -695,8 +757,8 @@
       if (type.includes("openAi") || type.includes("googleGemini") || type.includes("chainLlm")) {
         return this.mapLlmNode(ctx);
       }
-      if (type.includes("wait")) {
-        return this.mapWaitNode(ctx);
+      if (type === waitNodeType) {
+        return mapWaitInterval(ctx);
       }
       return this.mapGenericNode(ctx, `Unmapped Node (${type})`);
     }
@@ -1156,20 +1218,6 @@ ${legacyBinding}${execution}
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
     }
-    static mapWaitNode(ctx) {
-      const params = ctx.node.parameters || {};
-      const prevVar = ctx.previousVariableName || "inputItems";
-      const amount = Number(params.amount || 1);
-      const unit = params.unit || "seconds";
-      const msMultiplier = unit === "minutes" ? 60000 : unit === "hours" ? 3600000 : 1000;
-      const delayMs = amount * msMultiplier;
-      return `
-    // [Node: ${ctx.node.name}] Non-blocking Async Wait (${amount} ${unit})
-    await new Promise((resolve) => setTimeout(resolve, ${delayMs}));
-    ${ctx.variableName} = ${prevVar} || inputItems;
-    item = ${ctx.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
-    }
     static mapGenericNode(ctx, label) {
       const prevVar = ctx.previousVariableName || "inputItems";
       return `
@@ -1244,10 +1292,12 @@ ${legacyBinding}${execution}
 ` : "";
       const httpRequestImport = wf.nodes.some((node) => node.type.includes("httpRequest") && (usesMultipartBody(node.parameters) || usesJsonHeaders(node.parameters))) ? `import { createRequestForm, parseRequestHeaders } from '${runtimePrefix}/http-request';
 ` : "";
+      const waitImport = wf.nodes.some((node) => node.type === waitNodeType) ? `import { waitForInterval } from '${runtimePrefix}/wait-interval';
+` : "";
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}
+${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({

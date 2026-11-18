@@ -114,7 +114,7 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 | **Convert to File** | Converts all input items into a single UTF-8 JSON binary file |
 | **Compression** | Decompresses inline ZIP and GZIP binary fields with anti-Zip-Bomb & path-traversal limits |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
-| **Wait** | Non-blocking async `setTimeout` promise |
+| **Wait** | In-process time intervals with version-specific defaults and runtime expressions |
 
 > Legacy `$node["Node name"]` references in a `Code` node running once for all items read the first item from the connected output (`.json`, legacy `.data` alias, and `.binary` metadata).
 

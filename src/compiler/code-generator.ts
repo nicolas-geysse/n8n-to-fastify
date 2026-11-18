@@ -8,6 +8,7 @@ import { rabbitMqPublisherType } from './mappers/rabbitmq';
 import { s3NodeType } from './mappers/s3';
 import { compressionNodeType } from './mappers/compression';
 import { convertToFileType } from './mappers/convert-to-file';
+import { waitNodeType } from './mappers/wait-interval';
 import { usesJsonHeaders, usesMultipartBody } from './mappers/http-request';
 import { rabbitMqTriggerType } from './rabbitmq-trigger';
 
@@ -57,11 +58,14 @@ export class CodeGenerator {
     const httpRequestImport = wf.nodes.some(node =>
       node.type.includes('httpRequest') && (usesMultipartBody(node.parameters) || usesJsonHeaders(node.parameters))
     ) ? `import { createRequestForm, parseRequestHeaders } from '${runtimePrefix}/http-request';\n` : '';
+    const waitImport = wf.nodes.some(node => node.type === waitNodeType)
+      ? `import { waitForInterval } from '${runtimePrefix}/wait-interval';\n`
+      : '';
 
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}
+${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({

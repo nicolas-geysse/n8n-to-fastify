@@ -9,6 +9,7 @@ import { getS3DownloadIssue, s3NodeType } from './mappers/s3';
 import { compressionNodeType, getCompressionIssue } from './mappers/compression';
 import { convertToFileType, getConvertToFileIssue } from './mappers/convert-to-file';
 import { getMultipartIssue, usesMultipartBody } from './mappers/http-request';
+import { getWaitIntervalIssue, waitNodeType } from './mappers/wait-interval';
 import { parseRabbitMqTrigger, rabbitMqTriggerType } from './rabbitmq-trigger';
 
 const supportedNodeTypes = new Set([
@@ -84,6 +85,10 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     const params = node.parameters ?? {};
     const codeIssue = getLegacyNodeReferenceIssue(node);
     if (codeIssue) report(node.name, codeIssue);
+    if (node.type === waitNodeType) {
+      const issue = getWaitIntervalIssue(node);
+      if (issue) report(node.name, issue);
+    }
     if (node.type === compressionNodeType) {
       const issue = getCompressionIssue(node);
       if (issue) report(node.name, issue);
