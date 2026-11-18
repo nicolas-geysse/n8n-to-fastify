@@ -57,6 +57,7 @@ export async function readFileResponse(
   item: N8nItem,
   outputProperty: string,
   index: number,
+  includeResponseMetadata = false,
 ): Promise<N8nItem> {
   const bytes = new Uint8Array(await response.arrayBuffer());
   const mimeType = response.headers.get('content-type')?.split(';', 1)[0].trim() || 'application/octet-stream';
@@ -66,8 +67,16 @@ export async function readFileResponse(
     ? requestUrl.split('/').pop()
     : extension ? `${outputProperty}.${extension}` : undefined;
 
+  let json = item.json;
+  if (includeResponseMetadata) {
+    const headers = Object.fromEntries<string | string[]>(response.headers);
+    const cookies = response.headers.getSetCookie();
+    if (cookies.length > 0) headers['set-cookie'] = cookies;
+    json = { headers, statusCode: response.status, statusMessage: response.statusText };
+  }
+
   return {
-    json: item.json,
+    json,
     binary: { ...item.binary, [outputProperty]: { ...binary, fileName } },
     pairedItem: { item: index },
   };
