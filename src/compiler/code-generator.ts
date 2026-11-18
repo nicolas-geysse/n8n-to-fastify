@@ -4,6 +4,8 @@ import { isPositionMerge } from './mappers/position-merge';
 import { collectLegacyNodePorts, usesLegacyNodeReferences } from './mappers/code-context';
 import { s3NodeType } from './mappers/s3';
 import { usesJsonHeaders, usesMultipartBody } from './mappers/http-request';
+import { rabbitMqPublisherType } from './mappers/rabbitmq';
+import { rabbitMqTriggerType } from './rabbitmq-trigger';
 
 export class CodeGenerator {
   static sanitizeIdentifier(str: string): string {
@@ -37,11 +39,14 @@ export class CodeGenerator {
     const httpRequestImport = wf.nodes.some(node =>
       node.type.includes('httpRequest') && (usesMultipartBody(node.parameters) || usesJsonHeaders(node.parameters))
     ) ? `import { createRequestForm, parseRequestHeaders } from '${runtimePrefix}/http-request';\n` : '';
+    const rabbitMqImport = wf.nodes.some((node) => node.type === rabbitMqPublisherType)
+      ? `import { publishRabbitMq } from '${runtimePrefix}/rabbitmq';\n`
+      : '';
 
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}${s3Import}${httpRequestImport}
+${positionMergeImport}${legacyImport}${s3Import}${httpRequestImport}${rabbitMqImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({
@@ -61,9 +66,8 @@ const DateTime = {
       nodeVarMap.set(node.name, varName);
     });
 
-    const triggers = wf.orderedNodes.filter(
-      (n) => n.type.includes('webhook') || n.type.includes('trigger') || n.type.includes('cron')
-    );
+    const triggers = wf.triggers;
+    const hasRabbitMqTrigger = triggers.some(node => node.type === rabbitMqTriggerType);
     const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n));
 
     triggers.forEach((node) => {
@@ -71,10 +75,15 @@ const DateTime = {
       const varName = nodeVarMap.get(node.name)!;
       declCode += `  let ${varName}: any = inputItems;\n`;
 
-      const rawNodePath = (node.parameters?.path || node.name).toLowerCase().trim().replace(/^\/+/, '');
-      bodyCode += `  const triggerNode_${index} = item?.json?.__triggerNode;\n`;
-      bodyCode += `  const triggerPath_${index} = item?.json?.__triggerPath;\n`;
-      bodyCode += `  if (!triggerNode_${index} || triggerNode_${index} === ${JSON.stringify(node.name)} || triggerPath_${index} === ${JSON.stringify(rawNodePath)}) {\n`;
+      const nodeName = JSON.stringify(node.name);
+      let condition = `entryNode === ${nodeName}`;
+      if (node.type !== rabbitMqTriggerType) {
+        const rawNodePath = (node.parameters?.path || node.name).toLowerCase().trim().replace(/^\/+/, '');
+        bodyCode += `  const triggerNode_${index} = item?.json?.__triggerNode;\n`;
+        bodyCode += `  const triggerPath_${index} = item?.json?.__triggerPath;\n`;
+        condition = `entryNode === undefined && (!triggerNode_${index} || triggerNode_${index} === ${nodeName} || triggerPath_${index} === ${JSON.stringify(rawNodePath)})`;
+      }
+      bodyCode += `  if (${condition}) {\n`;
       bodyCode += `    ${varName} = inputItems;\n`;
       bodyCode += `    ctx.setNodeOutput(${JSON.stringify(node.name)}, inputItems);\n`;
       bodyCode += `  }\n`;
@@ -119,6 +128,8 @@ ${nodeCode.trim()}
           .map((t) => `ctx.hasExecutedNode(${JSON.stringify(t)})`)
           .join(' || ');
         bodyCode += `  if (${triggerConditions}) {\n  ${finalExecutionBlock.trim().replace(/\n/g, '\n  ')}\n  }\n`;
+      } else if (hasRabbitMqTrigger) {
+        bodyCode += `  if (entryNode === undefined) {\n  ${finalExecutionBlock.trim().replace(/\n/g, '\n  ')}\n  }\n`;
       } else {
         bodyCode += finalExecutionBlock;
       }
@@ -136,7 +147,8 @@ ${nodeCode.trim()}
     return `${imports}
 export async function ${functionName}(
   inputItems: N8nItem[] = [{ json: {} }],
-  parentCtx?: WorkflowContext
+  parentCtx?: WorkflowContext,
+  entryNode?: string
 ): Promise<{ items: N8nItem[]; context: WorkflowContext }> {
   const ctx = parentCtx || new WorkflowContext();
 ${declCode}

@@ -4,6 +4,7 @@ import { isPositionMerge, mapPositionMerge } from './position-merge';
 import { getLegacyNodeReferenceIssue } from './code-context';
 import { mapS3Download, s3NodeType } from './s3';
 import { generateMultipartBody, getMultipartIssue, usesJsonHeaders, usesMultipartBody } from './http-request';
+import { mapRabbitMqPublisher, rabbitMqPublisherType } from './rabbitmq';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -19,6 +20,9 @@ export interface NodeMapperContext {
 export class NodeMappers {
   static mapNode(ctx: NodeMapperContext): string {
     const type = ctx.node.type;
+    if (type === rabbitMqPublisherType) {
+      return mapRabbitMqPublisher(ctx);
+    }
 
     if (type === s3NodeType) {
       return mapS3Download(ctx);

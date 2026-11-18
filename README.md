@@ -99,6 +99,8 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 | **Merge** | Appends branches or combines items by position across up to ten destination ports |
 | **PostgreSQL** | Parameterized SQL execution via `DATABASE_URL` |
 | **S3** | Downloads files into binary items from an S3-compatible endpoint |
+| **RabbitMQ** | Publish messages to an existing exchange |
+| **RabbitMQ Trigger** | Consume a queue and acknowledge delivery after successful execution |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | Non-blocking async `setTimeout` promise |
 
@@ -184,6 +186,35 @@ Invalid JSON and JSON files without a workflow stop compilation.
 
 Passing these checks means none of the known issues were detected. To verify
 behavior, compare the generated service against representative n8n runs.
+
+---
+
+## RabbitMQ publisher
+
+The compiler supports the RabbitMQ **Send Message** operation in **Exchange**
+mode with default options, using node versions 1 and 1.1 from n8n 1.123.5.
+Declare and bind the exchange before starting the service. Set
+`RABBITMQ_URL` to the broker's AMQP or AMQPS connection URL at runtime.
+The generated manifest includes `amqplib` when a workflow uses this node.
+
+The publisher evaluates the exchange and routing key using the first input
+item and publishes one message per item. It waits for broker confirmation.
+The output preserves the n8n `{ success }` shape, where the boolean reflects
+whether the client's write buffer can accept more messages.
+
+## RabbitMQ trigger
+
+The compiler supports RabbitMQ Trigger v1 from n8n 1.123.5 with
+`executionFinishesSuccessfully`. Set the same `RABBITMQ_URL` as for publishing.
+The generated service checks the queue, optionally declares it with
+`assertQueue`, and binds it to existing exchanges. Set `parallelMessages`
+to limit unacknowledged deliveries. Disabled triggers do not start consumers.
+
+Each delivery starts the selected trigger branch with one item containing
+the message fields, properties and text body, or a parsed JSON body when
+`jsonParseBody` is enabled. The consumer acknowledges after success and
+requeues on failure. On shutdown it cancels the consumer, waits for in-flight
+executions, and closes its connection.
 
 ---
 
