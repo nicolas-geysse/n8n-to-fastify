@@ -1,4 +1,5 @@
 import type { ParsedWorkflow } from './core-parser';
+import { getWaitIntervalIssue, waitNodeType } from './mappers/wait-interval';
 
 const supportedNodeTypes = new Set([
   ...[
@@ -54,6 +55,10 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     }
 
     const params = node.parameters ?? {};
+    if (node.type === waitNodeType) {
+      const issue = getWaitIntervalIssue(node);
+      if (issue) report(node.name, issue);
+    }
     if (node.type === 'n8n-nodes-base.httpRequest') {
       if (params.sendBody && params.contentType && params.contentType !== 'json') {
         report(node.name, 'only JSON request bodies are supported');
