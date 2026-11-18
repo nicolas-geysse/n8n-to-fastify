@@ -91,7 +91,7 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 | **Execute Workflow** | Direct in-memory function invocation via `WorkflowRegistry` |
 | **IF / Filter** | Deterministic branch tracking (`outputIndex 0` vs `1`) |
 | **Switch** | Multi-branch router matching rules + fallback |
-| **Set / Edit Fields** | Object mutation with dot-notation & `keepOnlySet` |
+| **Set / Edit Fields** | Field assignments with dot notation and version-specific binary preservation |
 | **HTTP Request** | Native `fetch()` with headers, JSON body, and error handling |
 | **Aggregate** | In-memory item aggregation |
 | **Split Out** | Expands nested arrays into individual `N8nItem[]` items |
