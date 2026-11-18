@@ -28,9 +28,11 @@ test('generated Edit Fields nodes preserve binary data according to their export
     mkdirSync(inputs);
     cases.forEach(({ version, parameters }, index) => {
       const edit = { name: 'label', value: 'edited' };
+      const metadata = { name: 'fileName', value: '={{ $binary.data.fileName ?? null }}' };
+      const contentType = { name: 'mimeType', value: '={{ $binary["second"]?.mimeType ?? null }}' };
       const fields = (version ?? 3.4) >= 3
-        ? { assignments: { assignments: [edit] } }
-        : { values: { string: [edit] } };
+        ? { assignments: { assignments: [edit, metadata, contentType] } }
+        : { values: { string: [edit, metadata, contentType] } };
       writeFileSync(path.join(inputs, `case_${index}.json`), JSON.stringify({
         nodes: [{
           name: 'Edit Fields',
@@ -56,6 +58,10 @@ test('generated Edit Fields nodes preserve binary data according to their export
       const run = workflow[`workflow_case_${index}`] as CompiledWorkflowFn;
       const { items } = await run([item, { json: { keep: false, strip: true }, binary }, { json: {} }]);
       expect(items[0].json.label).toBe('edited');
+      expect(items[0].json.fileName).toBe('fixture.bin');
+      expect(items[0].json.mimeType).toBe('application/octet-stream');
+      expect(items[2].json.fileName).toBeNull();
+      expect(items[2].json.mimeType).toBeNull();
       expect(items[0].binary).toEqual(keep ? binary : undefined);
       if (keep) expect(items[0].binary).not.toBe(binary);
       expect(items[1].binary).toEqual(keepSecond ? binary : undefined);
