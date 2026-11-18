@@ -5,6 +5,7 @@ import { collectLegacyNodePorts, usesLegacyNodeReferences } from './mappers/code
 import { isRawEditFields, usesRawLegacyNodeReferences } from './mappers/raw-edit-fields';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
 import { s3NodeType } from './mappers/s3';
+import { compressionNodeType } from './mappers/compression';
 import { convertToFileType } from './mappers/convert-to-file';
 import { usesJsonHeaders, usesMultipartBody } from './mappers/http-request';
 import { rabbitMqTriggerType } from './rabbitmq-trigger';
@@ -46,6 +47,9 @@ export class CodeGenerator {
     const s3Import = wf.nodes.some(node => node.type === s3NodeType)
       ? `import { downloadS3Files } from '${runtimePrefix}/s3';\n`
       : '';
+    const compressionImport = wf.nodes.some(node => node.type === compressionNodeType)
+      ? `import { decompressItems } from '${runtimePrefix}/compression';\n`
+      : '';
     const jsonFileImport = wf.nodes.some(node => node.type === convertToFileType)
       ? `import { convertItemsToJsonFile } from '${runtimePrefix}/convert-to-json';\n`
       : '';
@@ -56,7 +60,7 @@ export class CodeGenerator {
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${jsonFileImport}${httpRequestImport}
+${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({

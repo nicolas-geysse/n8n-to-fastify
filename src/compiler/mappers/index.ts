@@ -6,6 +6,7 @@ import { continuesCodeOnRegularOutput } from './code-errors';
 import { getRawEditFieldsIssue, isRawEditFields, mapRawEditFields } from './raw-edit-fields';
 import { mapRabbitMqPublisher, rabbitMqPublisherType } from './rabbitmq';
 import { mapS3Download, s3NodeType } from './s3';
+import { compressionNodeType, mapCompression } from './compression';
 import { convertToFileType, mapConvertToFile } from './convert-to-file';
 import { generateMultipartBody, getMultipartIssue, usesJsonHeaders, usesMultipartBody } from './http-request';
 
@@ -33,6 +34,10 @@ export class NodeMappers {
 
     if (type === convertToFileType) {
       return mapConvertToFile(ctx);
+    }
+
+    if (type === compressionNodeType) {
+      return mapCompression(ctx);
     }
 
     if (type.includes('respondToWebhook')) {

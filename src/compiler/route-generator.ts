@@ -2,6 +2,7 @@ import { ParsedWorkflow } from './parser';
 import { CodeGenerator } from './code-generator';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
 import { s3NodeType } from './mappers/s3';
+import { compressionNodeType } from './mappers/compression';
 import { convertToFileType } from './mappers/convert-to-file';
 import { getRabbitMqTriggers, parseRabbitMqTrigger } from './rabbitmq-trigger';
 
@@ -199,7 +200,8 @@ try {
       workflow.nodes.some((node) => node.type === rabbitMqPublisherType)
     );
     const needsS3 = workflows.some(workflow => workflow.nodes.some(node => node.type === s3NodeType));
-    const needsMimeTypes = needsS3 ||
+    const needsCompression = workflows.some(workflow => workflow.nodes.some(node => node.type === compressionNodeType));
+    const needsMimeTypes = needsS3 || needsCompression ||
       workflows.some(workflow => workflow.nodes.some(node => node.type === convertToFileType));
     return JSON.stringify(
       {
@@ -216,6 +218,7 @@ try {
           ...(needsRabbitMq ? { amqplib: '^0.10.9' } : {}),
           ...(needsS3 ? { '@aws-sdk/client-s3': '3.808.0' } : {}),
           ...(needsMimeTypes ? { 'mime-types': '^3.0.1' } : {}),
+          ...(needsCompression ? { fflate: '0.8.3' } : {}),
           ...dependencies,
         },
       },

@@ -111,6 +111,7 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 | **RabbitMQ Trigger** | Consume a queue and acknowledge delivery after successful execution |
 | **S3** | Downloads files into binary items from an S3-compatible endpoint |
 | **Convert to File** | Converts all input items into a single UTF-8 JSON binary file |
+| **Compression** | Decompresses inline ZIP and GZIP binary fields with anti-Zip-Bomb & path-traversal limits |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | Non-blocking async `setTimeout` promise |
 

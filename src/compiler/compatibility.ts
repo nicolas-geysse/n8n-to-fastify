@@ -5,11 +5,13 @@ import { continuesCodeOnRegularOutput } from './mappers/code-errors';
 import { getRawEditFieldsIssue } from './mappers/raw-edit-fields';
 import { getRabbitMqPublisherIssue, rabbitMqPublisherType } from './mappers/rabbitmq';
 import { getS3DownloadIssue, s3NodeType } from './mappers/s3';
+import { compressionNodeType, getCompressionIssue } from './mappers/compression';
 import { convertToFileType, getConvertToFileIssue } from './mappers/convert-to-file';
 import { getMultipartIssue, usesMultipartBody } from './mappers/http-request';
 import { parseRabbitMqTrigger, rabbitMqTriggerType } from './rabbitmq-trigger';
 
 const supportedNodeTypes = new Set([
+  compressionNodeType,
   convertToFileType,
   rabbitMqPublisherType,
   rabbitMqTriggerType,
@@ -78,6 +80,10 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     const params = node.parameters ?? {};
     const codeIssue = getLegacyNodeReferenceIssue(node);
     if (codeIssue) report(node.name, codeIssue);
+    if (node.type === compressionNodeType) {
+      const issue = getCompressionIssue(node);
+      if (issue) report(node.name, issue);
+    }
     if (node.type === convertToFileType) {
       const issue = getConvertToFileIssue(node);
       if (issue) report(node.name, issue);
