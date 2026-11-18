@@ -1244,6 +1244,7 @@ ${legacyBinding}${execution}
       const urlExpr = ExpressionParser.parse(params.url || "");
       const multipart = usesMultipartBody(params);
       const jsonHeaders = usesJsonHeaders(params);
+      const neverError = ExpressionParser.parse(params.options?.response?.response?.neverError ?? false);
       let headersObj = "{}";
       if (jsonHeaders) {
         headersObj = `parseRequestHeaders(${ExpressionParser.parse(params.jsonHeaders ?? "{}")})`;
@@ -1298,7 +1299,7 @@ ${legacyBinding}${execution}
       const targetUrl = ${urlExpr};
       ${headersSnippet}
       const reqBody = ${bodySnippet};
-      const res = await fetch(targetUrl, {
+      const res = await fetchWithStatus(targetUrl, Boolean(${neverError}), {
         method: ${JSON.stringify(method)},
         headers: reqHeaders,
         ...(reqBody !== undefined ? { body: reqBody } : {})
@@ -1543,10 +1544,12 @@ ${legacyBinding}${execution}
 ` : "";
       const stopAndErrorImport = wf.nodes.some((node) => node.type === stopAndErrorType) ? `import { createWorkflowStopError } from '${runtimePrefix}/stop-and-error';
 ` : "";
+      const httpStatusImport = wf.nodes.some((node) => node.type.includes("httpRequest")) ? `import { fetchWithStatus } from '${runtimePrefix}/http-request';
+` : "";
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
+${httpStatusImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({
