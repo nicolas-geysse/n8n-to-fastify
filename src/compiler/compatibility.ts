@@ -1,7 +1,9 @@
 import type { ParsedWorkflow } from './core-parser';
 import { getS3DownloadIssue, s3NodeType } from './mappers/s3';
+import { compressionNodeType, getCompressionIssue } from './mappers/compression';
 
 const supportedNodeTypes = new Set([
+  compressionNodeType,
   s3NodeType,
   ...[
     'webhook',
@@ -56,6 +58,10 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     }
 
     const params = node.parameters ?? {};
+    if (node.type === compressionNodeType) {
+      const issue = getCompressionIssue(node);
+      if (issue) report(node.name, issue);
+    }
     if (node.type === s3NodeType) {
       const issue = getS3DownloadIssue(node);
       if (issue) report(node.name, issue);

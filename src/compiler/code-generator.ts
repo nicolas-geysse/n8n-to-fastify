@@ -1,6 +1,7 @@
 import { ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
 import { s3NodeType } from './mappers/s3';
+import { compressionNodeType } from './mappers/compression';
 
 export class CodeGenerator {
   static sanitizeIdentifier(str: string): string {
@@ -20,11 +21,14 @@ export class CodeGenerator {
     const s3Import = wf.nodes.some(node => node.type === s3NodeType)
       ? `import { downloadS3Files } from '${runtimePrefix}/s3';\n`
       : '';
+    const compressionImport = wf.nodes.some(node => node.type === compressionNodeType)
+      ? `import { decompressItems } from '${runtimePrefix}/compression';\n`
+      : '';
 
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${s3Import}
+${s3Import}${compressionImport}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),

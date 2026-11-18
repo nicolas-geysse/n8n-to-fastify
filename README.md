@@ -98,6 +98,7 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 | **Merge** | Combines or appends parallel execution branches |
 | **PostgreSQL** | Parameterized SQL execution via `DATABASE_URL` |
 | **S3** | Downloads files into binary items from an S3-compatible endpoint |
+| **Compression** | Decompresses inline ZIP and GZIP binary fields into separate files |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | Non-blocking async `setTimeout` promise |
 
