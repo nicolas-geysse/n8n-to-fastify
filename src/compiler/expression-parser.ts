@@ -82,6 +82,10 @@ export class ExpressionParser {
       return `item?.json?.${parts.join('?.')}`;
     });
 
+    result = result.replace(/\$binary\b((?:\.[a-zA-Z0-9_$]+)*)(\[)?/g, (_, path, bracket) =>
+      'item?.binary' + path.replaceAll('.', '?.') + (bracket ? '?.[' : '')
+    );
+
     result = result.replace(/\$input\.first\(\)\.json/g, `${firstInputItem ?? 'item'}?.json`);
     if (firstInputItem) result = result.replace(/\$input\.first\(\)/g, firstInputItem);
     result = result.replace(/\$input\.item\.json/g, 'item?.json');
