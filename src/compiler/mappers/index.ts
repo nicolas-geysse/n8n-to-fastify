@@ -1,5 +1,6 @@
 import { N8nNode } from '../parser';
 import { ExpressionParser } from '../expression-parser';
+import { mapRabbitMqPublisher, rabbitMqPublisherType } from './rabbitmq';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -14,6 +15,9 @@ export interface NodeMapperContext {
 export class NodeMappers {
   static mapNode(ctx: NodeMapperContext): string {
     const type = ctx.node.type;
+    if (type === rabbitMqPublisherType) {
+      return mapRabbitMqPublisher(ctx);
+    }
 
     if (type.includes('respondToWebhook')) {
       return this.mapRespondToWebhookNode(ctx);

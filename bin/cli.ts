@@ -103,7 +103,7 @@ const compile = program
     fs.writeFileSync(path.join(outDir, 'server.ts'), RouteGenerator.generateServerEntry(), 'utf8');
     fs.writeFileSync(
       path.join(outDir, 'package.json'),
-      RouteGenerator.generateOutputPackageJson(dependencies),
+      RouteGenerator.generateOutputPackageJson(workflows, dependencies),
       'utf8'
     );
 

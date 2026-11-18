@@ -106,6 +106,7 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 | **Split Out** | Expands nested arrays into individual `N8nItem[]` items |
 | **Merge** | Combines or appends parallel execution branches |
 | **PostgreSQL** | Parameterized SQL execution via `DATABASE_URL` |
+| **RabbitMQ** | Publish messages to an existing exchange (`RABBITMQ_URL`) |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | Non-blocking async `setTimeout` promise |
 
@@ -180,6 +181,14 @@ bun run compile ./workflows --strict --out ./compiled-service
 In `--strict` mode, the CLI validates workflows and stops before writing output if it detects known unsupported features: unsupported node types, non-`main` connections, disabled nodes, unsupported error handling (`continueOnFail` / `onError`), unsupported `HTTP Request` or `Edit Fields` (`raw`) options, or `Merge` (`combine`) with more than two inputs. Place only workflow exports in the input directory, as invalid JSON or non-workflow JSON files also fail compilation in strict mode.
 
 Passing `--strict` means no known compatibility issues were detected; always validate runtime behavior against representative n8n runs.
+
+---
+
+## 🐇 RabbitMQ Publisher
+
+The compiler supports the RabbitMQ **Send Message** operation in **Exchange** mode with default options (`typeVersion` 1 and 1.1). Declare and bind the exchange before starting the service, and set `RABBITMQ_URL` to the broker's AMQP or AMQPS connection URL at runtime. The generated `package.json` includes `amqplib` automatically when a workflow uses this node.
+
+The publisher evaluates the exchange and routing key using the first input item, publishes one JSON message per item, waits for broker confirmation, and returns the n8n `{ success }` output shape.
 
 ---
 

@@ -241,10 +241,53 @@
     }
   }
 
+  // src/compiler/mappers/rabbitmq.ts
+  var rabbitMqPublisherType = "n8n-nodes-base.rabbitmq";
+  function getRabbitMqPublisherIssue(node) {
+    const params = node.parameters ?? {};
+    const version = node.typeVersion ?? 1;
+    if (version !== 1 && version !== 1.1) {
+      return "RabbitMQ needs typeVersion 1 or 1.1";
+    }
+    if ((params.operation ?? "sendMessage") !== "sendMessage" || params.mode !== "exchange" || Object.keys(params.options ?? {}).length > 0) {
+      return "RabbitMQ only supports Send Message to an existing exchange with default options";
+    }
+  }
+  function mapRabbitMqPublisher(ctx) {
+    const issue = getRabbitMqPublisherIssue(ctx.node);
+    if (issue)
+      throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
+    const params = ctx.node.parameters ?? {};
+    const source = ctx.previousVariableName ?? "inputItems";
+    const exchange = ExpressionParser.parse(params.exchange ?? "");
+    const routingKey = ExpressionParser.parse(params.routingKey ?? "");
+    const sendInputData = ExpressionParser.parse(params.sendInputData ?? true);
+    const message = ExpressionParser.parse(params.message ?? "");
+    const output = ctx.variableName;
+    return `
+    {
+      const source: N8nItem[] = ${source} || inputItems;
+      ${output} = [];
+      if (source.length > 0) {
+        item = source[0];
+        const exchange = String(${exchange});
+        const routingKey = String(${routingKey});
+        const sendInputData = Boolean(${sendInputData});
+        const messages = source.map((item) => sendInputData ? JSON.stringify(item.json) : String(${message}));
+        ${output} = await publishRabbitMq(exchange, routingKey, messages);
+      }
+      item = ${output}[0] || { json: {} };
+      ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${output});
+    }`;
+  }
+
   // src/compiler/mappers/index.ts
   class NodeMappers {
     static mapNode(ctx) {
       const type = ctx.node.type;
+      if (type === rabbitMqPublisherType) {
+        return mapRabbitMqPublisher(ctx);
+      }
       if (type.includes("respondToWebhook")) {
         return this.mapRespondToWebhookNode(ctx);
       }
@@ -750,10 +793,12 @@
       const functionName = `workflow_${this.sanitizeIdentifier(wf.fileName)}`;
       const depth = (wf.relativePath.match(/\//g) || []).length;
       const runtimePrefix = "../".repeat(depth + 1) + "runtime";
+      const rabbitMqImport = wf.nodes.some((node) => node.type === rabbitMqPublisherType) ? `import { publishRabbitMq } from '${runtimePrefix}/rabbitmq';
+` : "";
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-
+${rabbitMqImport}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),
@@ -979,7 +1024,8 @@ try {
 }
 `;
     }
-    static generateOutputPackageJson(dependencies = {}) {
+    static generateOutputPackageJson(workflows = [], dependencies = {}) {
+      const needsRabbitMq = workflows.some((workflow) => workflow.nodes.some((node) => node.type === rabbitMqPublisherType));
       return JSON.stringify({
         name: "compiled-n8n-service",
         version: "1.0.0",
@@ -991,6 +1037,7 @@ try {
         dependencies: {
           "@fastify/cors": "^9.0.1",
           fastify: "^4.28.1",
+          ...needsRabbitMq ? { amqplib: "^0.10.9" } : {},
           ...dependencies
         }
       }, null, 2);
