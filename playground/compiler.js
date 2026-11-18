@@ -349,6 +349,19 @@
       const params = ctx.node.parameters || {};
       const prevVar = ctx.previousVariableName || "inputItems";
       const keepOnlySet = params.options?.keepOnlySet === true || params.include === "none";
+      const version = ctx.node.typeVersion ?? 3.4;
+      const options = params.options ?? {};
+      let includeBinary;
+      if (version >= 3.4) {
+        const includeOtherFields = ExpressionParser.parse(params.includeOtherFields ?? false);
+        const include = ExpressionParser.parse(params.include ?? "all");
+        const stripBinary = ExpressionParser.parse(options.stripBinary ?? false);
+        includeBinary = `(${includeOtherFields}) && (${include}) !== 'none' && !(${stripBinary})`;
+      } else if (version >= 3) {
+        includeBinary = ExpressionParser.parse(options.includeBinary ?? false);
+      } else {
+        includeBinary = `!(${ExpressionParser.parse(params.keepOnlySet ?? options.keepOnlySet ?? false)})`;
+      }
       const assignments = [];
       if (params.assignments?.assignments && Array.isArray(params.assignments.assignments)) {
         for (const a of params.assignments.assignments) {
@@ -378,7 +391,10 @@
       const newJson: Record<string, any> = ${keepOnlySet ? "{}" : "{ ...currentItem.json }"};
       ${assignments.join(`
       `)}
-      return { json: newJson };
+      return {
+        json: newJson,
+        ...(currentItem.binary !== undefined && (${includeBinary}) ? { binary: { ...currentItem.binary } } : {}),
+      };
     });
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
