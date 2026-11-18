@@ -1,5 +1,6 @@
 import type { ParsedWorkflow } from './core-parser';
 import { getPositionMergeIssue, isPositionMerge } from './mappers/position-merge';
+import { getLegacyNodeReferenceIssue } from './mappers/code-context';
 
 const supportedNodeTypes = new Set([
   ...[
@@ -55,6 +56,8 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     }
 
     const params = node.parameters ?? {};
+    const codeIssue = getLegacyNodeReferenceIssue(node);
+    if (codeIssue) report(node.name, codeIssue);
     if (node.type === 'n8n-nodes-base.httpRequest') {
       if (params.sendBody && params.contentType && params.contentType !== 'json') {
         report(node.name, 'only JSON request bodies are supported');

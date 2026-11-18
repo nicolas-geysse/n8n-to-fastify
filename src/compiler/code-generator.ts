@@ -1,6 +1,7 @@
 import { ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
 import { isPositionMerge } from './mappers/position-merge';
+import { collectLegacyNodePorts, usesLegacyNodeReferences } from './mappers/code-context';
 
 export class CodeGenerator {
   static sanitizeIdentifier(str: string): string {
@@ -20,11 +21,20 @@ export class CodeGenerator {
     const positionMergeImport = wf.nodes.some(isPositionMerge)
       ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';\n`
       : '';
+    const legacyNodes = new Set(wf.nodes.filter(usesLegacyNodeReferences));
+    const legacyImport = legacyNodes.size > 0
+      ? `import { createLegacyNodeReferences } from '${runtimePrefix}/code-context';\n`
+      : '';
+    const legacyNames = legacyNodes.size > 0
+      ? `const legacyNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map(node => node.name))});\n`
+      : '';
+    const nodesByName = new Map(wf.nodes.map(node => [node.name, node]));
 
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}
+${positionMergeImport}${legacyImport}
+${legacyNames}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),
@@ -92,6 +102,7 @@ const DateTime = {
         workflowName: wf.name,
         variableName: varName,
         previousVariableName: actualPrevVar,
+        legacyNodePorts: legacyNodes.has(node) ? collectLegacyNodePorts(node, nodesByName) : undefined,
       });
 
       const finalExecutionBlock = `  if (${branchCheckStr}) {\n    ${nodeCode.trim().replace(/\n/g, '\n    ')}\n  }\n`;

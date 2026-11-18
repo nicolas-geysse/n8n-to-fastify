@@ -101,6 +101,10 @@ curl -X POST http://localhost:3000/webhook/lead-intake \
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | Non-blocking async `setTimeout` promise |
 
+Legacy `$node["Node name"]` references in a Code node running once for all
+items read the first item from the connected output. Use `.json` (or its
+legacy `.data` alias) for its JSON and `.binary` for file metadata.
+
 ---
 
 ## 🧪 Tests & Reproducible Benchmark
