@@ -35,7 +35,8 @@ test.each([
     const { workflow_workflow } = await import(path.join(output, 'workflows', 'workflow.ts'));
     const reason = 'fixture failure';
     const success = [{ json: { fail: false, reason } }];
-    const { context } = await workflow_workflow(success);
+    const { context, items } = await workflow_workflow(success);
+    expect(items).toEqual(success);
     expect(context.getNode('Pass').all()).toEqual(success);
     await expect(workflow_workflow([{ json: { fail: true, reason } }])).rejects.toMatchObject({
       name: 'WorkflowStopError', message: reason, metadata,
