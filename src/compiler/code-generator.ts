@@ -116,7 +116,8 @@ const DateTime = {
 
       let branchCheckStr = 'true';
       const incoming = node.incomingConnections ?? [];
-      const runPerIncomingBatch = incoming.length > 0 && !node.type.includes('merge');
+      const passesInput = disabledModes.get(node) === 'passthrough';
+      const runPerIncomingBatch = incoming.length > 0 && (passesInput || !node.type.includes('merge'));
 
       if (incoming.length > 0) {
         const branchChecks = incoming.map(
@@ -126,7 +127,7 @@ const DateTime = {
       }
 
       const prevExpr = runPerIncomingBatch ? 'incomingItems' : 'inputItems';
-      let nodeCode = disabledModes.get(node) === 'passthrough' ? `
+      let nodeCode = passesInput ? `
     ${varName} = ${prevExpr} || [];
     item = ${varName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});` : NodeMappers.mapNode({
