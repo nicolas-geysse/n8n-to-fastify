@@ -222,7 +222,7 @@ Each object is downloaded in order and stored as base64 under the configured bin
 
 `HTTP Request` supports multipart text fields and n8n binary-file fields for `POST`, `PUT`, and `PATCH`. Binary fields read inline base64 data from the selected binary property and preserve file name and MIME type; the runtime removes manual `content-type` and `content-length` headers so `FormData` computes the boundary automatically.
 
-Set the response format to **File** to save the response in the configured binary property (default `data`) alongside the input JSON. Strict mode rejects the combination of **File** and **Include Response Headers and Status**.
+Set the response format to **File** to save the response in the configured binary property (default `data`) alongside the input JSON. With **Include Response Headers and Status**, the JSON output contains `headers`, `statusCode`, and `statusMessage`. The body is available in the binary field.
 
 With `Send Headers` enabled, `specifyHeaders: 'json'` accepts either a JSON string or an object of header names and values.
 

@@ -483,11 +483,14 @@ ${legacyBinding}${execution}
       return { json: typeof data === 'object' && data !== null ? data : { data } };`;
     if (usesFileResponse(params)) {
       callbackParameters += ', index: number, batch: N8nItem[]';
-      const outputProperty = ExpressionParser.parse(
-        params.options.response.response.outputPropertyName ?? 'data', 'batch[0]', 'batch',
-      );
-      responseSnippet = `const outputProperty = ((item: N8nItem) => ${outputProperty})(batch[0]);
-      return readFileResponse(res, targetUrl, currentItem, String(outputProperty ?? 'data'), index);`;
+      const responseOptions = params.options.response.response;
+      const outputProperty = ExpressionParser.parse(responseOptions.outputPropertyName ?? 'data', 'batch[0]', 'batch');
+      const fullResponse = ExpressionParser.parse(responseOptions.fullResponse ?? false, 'batch[0]', 'batch');
+      responseSnippet = `const [outputProperty, includeResponseMetadata] = ((item: N8nItem) => [
+        String(${outputProperty} ?? 'data'),
+        Boolean(${fullResponse}),
+      ] as const)(batch[0]);
+      return readFileResponse(res, targetUrl, currentItem, outputProperty, index, includeResponseMetadata);`;
     }
 
     return `
