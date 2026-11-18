@@ -665,7 +665,6 @@ const DateTime = {
 `;
       let bodyCode = `  ctx.setNodeOutput("__initial__", inputItems);
 `;
-      let prevVarName = "inputItems";
       const nodeVarMap = new Map;
       wf.orderedNodes.forEach((node, index) => {
         const varName = `node_${index}_${this.sanitizeIdentifier(node.name)}`;
@@ -683,14 +682,10 @@ const DateTime = {
 `;
         bodyCode += `  const triggerPath_${index} = item?.json?.__triggerPath;
 `;
-        bodyCode += `  if (!triggerNode_${index} || triggerNode_${index} === ${JSON.stringify(node.name)} || triggerPath_${index} === ${JSON.stringify(rawNodePath)}) {
-`;
-        bodyCode += `    ${varName} = inputItems;
-`;
-        bodyCode += `    ctx.setNodeOutput(${JSON.stringify(node.name)}, inputItems);
-`;
-        bodyCode += `  }
-`;
+        const condition = `!triggerNode_${index} || triggerNode_${index} === ${JSON.stringify(node.name)} || triggerPath_${index} === ${JSON.stringify(rawNodePath)}`;
+        const nodeCode = `${varName} = inputItems;
+ctx.setNodeOutput(${JSON.stringify(node.name)}, inputItems);`;
+        bodyCode += this.generateNodeBlock(wf.id, node, condition, nodeCode);
       });
       nonTriggers.forEach((node) => {
         const varName = nodeVarMap.get(node.name);
@@ -715,22 +710,12 @@ const DateTime = {
           variableName: varName,
           previousVariableName: actualPrevVar
         });
-        const finalExecutionBlock = `  if (${branchCheckStr}) {
-    ${nodeCode.trim().replace(/\n/g, `
-    `)}
-  }
-`;
-        if (node.ancestorTriggers && node.ancestorTriggers.length > 0) {
-          const triggerConditions = node.ancestorTriggers.map((t) => `ctx.hasExecutedNode(${JSON.stringify(t)})`).join(" || ");
-          bodyCode += `  if (${triggerConditions}) {
-  ${finalExecutionBlock.trim().replace(/\n/g, `
-  `)}
-  }
-`;
-        } else {
-          bodyCode += finalExecutionBlock;
+        const ancestorTriggers = node.ancestorTriggers ?? [];
+        if (ancestorTriggers.length > 0) {
+          const triggerConditions = ancestorTriggers.map((t) => `ctx.hasExecutedNode(${JSON.stringify(t)})`).join(" || ");
+          branchCheckStr = `(${triggerConditions}) && ${branchCheckStr}`;
         }
-        prevVarName = node.name;
+        bodyCode += this.generateNodeBlock(wf.id, node, branchCheckStr, nodeCode, ancestorTriggers.length > 0 ? "      " : "    ");
       });
       const lastNodeName = wf.orderedNodes[wf.orderedNodes.length - 1]?.name;
       const returnItemsExpr = lastNodeName ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])` : `inputItems`;
@@ -749,6 +734,24 @@ ${bodyCode}
 }
 
 registerWorkflow(${JSON.stringify(keys)}, ${functionName});
+`;
+    }
+    static generateNodeBlock(workflowId, node, condition, nodeCode, nodeIndent = "    ") {
+      const traceArgs = [workflowId, node.id || node.name, node.name].map((value) => JSON.stringify(value)).join(", ");
+      const body = nodeIndent + nodeCode.trim().replace(/\n/g, `
+${nodeIndent}`);
+      return `  if (${condition}) {
+    const finishTrace = ctx.startNodeTrace(${traceArgs});
+    try {
+${body}
+    } catch (error) {
+      finishTrace?.('error');
+      throw error;
+    }
+    finishTrace?.('completed');
+  } else {
+    ctx.skipNodeTrace(${traceArgs});
+  }
 `;
     }
   }

@@ -160,6 +160,14 @@ flowchart LR
 
 ---
 
+## 🔍 Workflow Execution Traces
+
+Set `N8N_TO_FASTIFY_TRACE=1` when running the generated service to emit one JSON line per node event (`schemaVersion: 1`) with `executionId`, `workflowId`, `nodeId`, `nodeName`, and `status` (`started`, `completed`, `skipped`, or `error`). Completed events include output ports and item counts; completed and error events include `durationMs`.
+
+Traces are disabled by default and record execution metadata only (no payloads or error details). Hosts invoking compiled workflows directly can also pass a custom trace sink to `WorkflowContext`.
+
+---
+
 ## 🛡️ Strict Compatibility Checks
 
 ```bash
