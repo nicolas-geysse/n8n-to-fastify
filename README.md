@@ -119,6 +119,21 @@ Measured output:
 
 ---
 
+## Workflow execution traces
+
+Set `N8N_TO_FASTIFY_TRACE=1` when starting the generated service to emit
+one JSON line per node event with `schemaVersion: 1`. Events include the execution ID, workflow
+and node identifiers, and a status of `started`, `completed`, `skipped`,
+or `error`. Completed events include output ports and item counts.
+Completed and error events include the elapsed time in milliseconds.
+
+Traces contain execution metadata only and are disabled by default.
+For parity tests, compare node statuses, output ports, and item counts.
+Execution IDs and durations vary per run. Hosts that invoke a compiled
+workflow directly can supply a trace sink to `WorkflowContext`.
+
+---
+
 ## 🏗️ Visual-to-Bare-Metal CI/CD Pattern
 
 ```mermaid

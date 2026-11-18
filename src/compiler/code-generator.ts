@@ -1,4 +1,4 @@
-import { ParsedWorkflow } from './parser';
+import { N8nNode, ParsedWorkflow } from './parser';
 import { NodeMappers } from './mappers';
 
 export class CodeGenerator {
@@ -31,7 +31,6 @@ const DateTime = {
 
     let declCode = '  let item: N8nItem = inputItems[0] || { json: {} };\n';
     let bodyCode = '  ctx.setNodeOutput("__initial__", inputItems);\n';
-    let prevVarName = 'inputItems';
 
     const nodeVarMap = new Map<string, string>();
     wf.orderedNodes.forEach((node, index) => {
@@ -52,10 +51,9 @@ const DateTime = {
       const rawNodePath = (node.parameters?.path || node.name).toLowerCase().trim().replace(/^\/+/, '');
       bodyCode += `  const triggerNode_${index} = item?.json?.__triggerNode;\n`;
       bodyCode += `  const triggerPath_${index} = item?.json?.__triggerPath;\n`;
-      bodyCode += `  if (!triggerNode_${index} || triggerNode_${index} === ${JSON.stringify(node.name)} || triggerPath_${index} === ${JSON.stringify(rawNodePath)}) {\n`;
-      bodyCode += `    ${varName} = inputItems;\n`;
-      bodyCode += `    ctx.setNodeOutput(${JSON.stringify(node.name)}, inputItems);\n`;
-      bodyCode += `  }\n`;
+      const condition = `!triggerNode_${index} || triggerNode_${index} === ${JSON.stringify(node.name)} || triggerPath_${index} === ${JSON.stringify(rawNodePath)}`;
+      const nodeCode = `${varName} = inputItems;\nctx.setNodeOutput(${JSON.stringify(node.name)}, inputItems);`;
+      bodyCode += this.generateNodeBlock(wf.id, node, condition, nodeCode);
     });
 
     nonTriggers.forEach((node) => {
@@ -90,18 +88,13 @@ const DateTime = {
         previousVariableName: actualPrevVar,
       });
 
-      const finalExecutionBlock = `  if (${branchCheckStr}) {\n    ${nodeCode.trim().replace(/\n/g, '\n    ')}\n  }\n`;
-
       if (node.ancestorTriggers && node.ancestorTriggers.length > 0) {
         const triggerConditions = node.ancestorTriggers
           .map((t) => `ctx.hasExecutedNode(${JSON.stringify(t)})`)
           .join(' || ');
-        bodyCode += `  if (${triggerConditions}) {\n  ${finalExecutionBlock.trim().replace(/\n/g, '\n  ')}\n  }\n`;
-      } else {
-        bodyCode += finalExecutionBlock;
+        branchCheckStr = `(${triggerConditions}) && ${branchCheckStr}`;
       }
-
-      prevVarName = node.name;
+      bodyCode += this.generateNodeBlock(wf.id, node, branchCheckStr, nodeCode);
     });
 
     const lastNodeName = wf.orderedNodes[wf.orderedNodes.length - 1]?.name;
@@ -124,6 +117,23 @@ ${bodyCode}
 }
 
 registerWorkflow(${JSON.stringify(keys)}, ${functionName});
+`;
+  }
+
+  private static generateNodeBlock(workflowId: string, node: N8nNode, condition: string, nodeCode: string): string {
+    const traceArgs = [workflowId, node.id || node.name, node.name].map(value => JSON.stringify(value)).join(', ');
+    return `  if (${condition}) {
+    const finishTrace = ctx.startNodeTrace(${traceArgs});
+    try {
+      ${nodeCode.trim().replace(/\n/g, '\n      ')}
+    } catch (error) {
+      finishTrace?.('error');
+      throw error;
+    }
+    finishTrace?.('completed');
+  } else {
+    ctx.skipNodeTrace(${traceArgs});
+  }
 `;
   }
 }
