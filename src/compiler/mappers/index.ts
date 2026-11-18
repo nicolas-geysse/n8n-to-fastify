@@ -2,6 +2,7 @@ import { N8nNode } from '../parser';
 import { ExpressionParser } from '../expression-parser';
 import { isPositionMerge, mapPositionMerge } from './position-merge';
 import { getLegacyNodeReferenceIssue } from './code-context';
+import { continuesCodeOnRegularOutput } from './code-errors';
 import { getRawEditFieldsIssue, isRawEditFields, mapRawEditFields } from './raw-edit-fields';
 import { mapRabbitMqPublisher, rabbitMqPublisherType } from './rabbitmq';
 import { mapS3Download, s3NodeType } from './s3';
@@ -149,14 +150,25 @@ export class NodeMappers {
       .replace(/\$\(['"](.*?)['"]\)\.all\(\)/g, (_: string, n: string) => `(ctx.getNode(${JSON.stringify(n)})?.all() || [])`)
       .replace(/\$now/g, 'DateTime.now()');
 
+    const runCode = `
+      const result = await (async () => {
+        ${transformedCode}
+      })();
+      return n8n.normalizeItems(result);`;
+    // Keep the user's code indentation unchanged, including multiline template literals.
+    const execution = continuesCodeOnRegularOutput(ctx.node)
+      ? `
+      try {${runCode}
+      } catch (error) {
+        return [{ json: { error: error instanceof Error ? error.message : String(error) } }];
+      }`
+      : runCode;
+
     return `
     // [Node: ${ctx.node.name}] Code Execution
     ${ctx.variableName} = await (async () => {
       const currentItems = ${prevVar} || inputItems;
-${legacyBinding}      const result = await (async () => {
-        ${transformedCode}
-      })();
-      return n8n.normalizeItems(result);
+${legacyBinding}${execution}
     })();
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;

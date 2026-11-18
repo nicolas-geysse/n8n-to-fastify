@@ -370,6 +370,12 @@
     return [...upstream];
   }
 
+  // src/compiler/mappers/code-errors.ts
+  function continuesCodeOnRegularOutput(node) {
+    const params = node.parameters ?? {};
+    return node.type === "n8n-nodes-base.code" && node.onError === "continueRegularOutput" && (params.language ?? "javaScript") === "javaScript" && (params.mode ?? "runOnceForAllItems") === "runOnceForAllItems";
+  }
+
   // src/compiler/mappers/raw-edit-fields.ts
   function isRawEditFields(node) {
     return node.type === "n8n-nodes-base.set" && node.parameters?.mode === "raw";
@@ -698,14 +704,21 @@
       const legacyBinding = ctx.legacyNodePorts ? `      const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});
 ` : "";
       const transformedCode = rawCode.replace(/\$input\.all\(\)/g, "currentItems").replace(/\$input\.first\(\)/g, "(currentItems[0] || { json: {} })").replace(/\$input\.item/g, "(currentItems[0] || { json: {} })").replace(/\$json/g, "(currentItems[0]?.json || {})").replace(/\$\(['"](.*?)['"]\)\.first\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.first() || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.item/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.item || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.all\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.all() || [])`).replace(/\$now/g, "DateTime.now()");
+      const runCode = `
+      const result = await (async () => {
+        ${transformedCode}
+      })();
+      return n8n.normalizeItems(result);`;
+      const execution = continuesCodeOnRegularOutput(ctx.node) ? `
+      try {${runCode}
+      } catch (error) {
+        return [{ json: { error: error instanceof Error ? error.message : String(error) } }];
+      }` : runCode;
       return `
     // [Node: ${ctx.node.name}] Code Execution
     ${ctx.variableName} = await (async () => {
       const currentItems = ${prevVar} || inputItems;
-${legacyBinding}      const result = await (async () => {
-        ${transformedCode}
-      })();
-      return n8n.normalizeItems(result);
+${legacyBinding}${execution}
     })();
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;

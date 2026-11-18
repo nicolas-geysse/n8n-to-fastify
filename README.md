@@ -96,6 +96,7 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 | **Webhook** | Native Fastify route handler (`GET`, `POST`, `PUT`, `DELETE`, `ALL`) |
 | **Respond to Webhook** | `reply.code(status).send(payload)` with JSON/Text support |
 | **Code / Function** | Native async JavaScript execution with `$input`, `$json`, `$env`, and `$('Node')` bindings |
+| **Code on Error** | JavaScript Code running once for all items can emit `json.error` through its regular output |
 | **Execute Workflow** | Direct in-memory function invocation via `WorkflowRegistry` |
 | **IF** | Routes each item to its true or false output |
 | **Filter** | Deterministic branch tracking |
