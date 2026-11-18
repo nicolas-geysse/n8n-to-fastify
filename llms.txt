@@ -5,7 +5,7 @@
 ## Links
 
 - Repository: https://github.com/rogeriomaciel/n8n-to-fastify
-- Official Landing Page & Live Playground: https://www.rogeriomaciel.com.br/en/n8n-to-fastify/
+- Official Landing Page & Live Playground: https://rogeriomaciel.com.br/en/n8n-to-fastify/
 - GitHub Pages Playground: https://rogeriomaciel.github.io/n8n-to-fastify/
 - Releases: https://github.com/rogeriomaciel/n8n-to-fastify/releases
 - Documentation (README): https://github.com/rogeriomaciel/n8n-to-fastify/blob/main/README.md
