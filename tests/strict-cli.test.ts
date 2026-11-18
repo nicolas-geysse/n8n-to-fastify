@@ -26,7 +26,7 @@ test('strict compile reports known incompatibilities before writing output', () 
           type: 'n8n-nodes-base.httpRequest',
           onError: 'continueRegularOutput',
           parameters: {
-            sendBody: true, contentType: 'multipart-form-data',
+            sendBody: true, contentType: 'raw',
             sendHeaders: true, specifyHeaders: 'json',
           },
         },
@@ -45,8 +45,7 @@ test('strict compile reports known incompatibilities before writing output', () 
     const diagnostics = strict.stderr.toString();
     expect(diagnostics).toContain('Workflow "Compatibility fixture", node "Trigger": unsupported node type');
     expect(diagnostics).toContain('connection type "ai_tool" is ignored');
-    expect(diagnostics).toContain('only JSON request bodies are supported');
-    expect(diagnostics).toContain('JSON header configuration is ignored');
+    expect(diagnostics).toContain('only JSON and multipart request bodies are supported');
     expect(diagnostics).toContain('the configured onError behavior is ignored');
     expect(diagnostics).toContain('node "Legacy Code": legacy continueOnFail is ignored');
     expect(diagnostics).toContain('raw JSON mode is ignored');

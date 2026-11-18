@@ -3,6 +3,7 @@ import { NodeMappers } from './mappers';
 import { isPositionMerge } from './mappers/position-merge';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
 import { s3NodeType } from './mappers/s3';
+import { usesJsonHeaders, usesMultipartBody } from './mappers/http-request';
 import { rabbitMqTriggerType } from './rabbitmq-trigger';
 
 export class CodeGenerator {
@@ -29,11 +30,14 @@ export class CodeGenerator {
     const s3Import = wf.nodes.some(node => node.type === s3NodeType)
       ? `import { downloadS3Files } from '${runtimePrefix}/s3';\n`
       : '';
+    const httpRequestImport = wf.nodes.some(node =>
+      node.type.includes('httpRequest') && (usesMultipartBody(node.parameters) || usesJsonHeaders(node.parameters))
+    ) ? `import { createRequestForm, parseRequestHeaders } from '${runtimePrefix}/http-request';\n` : '';
 
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${rabbitMqImport}${s3Import}
+${positionMergeImport}${rabbitMqImport}${s3Import}${httpRequestImport}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),

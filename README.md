@@ -101,7 +101,7 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 | **Filter** | Deterministic branch tracking |
 | **Switch** | Routes each item by rule or output-index expression, with configurable fallback in rules mode |
 | **Set / Edit Fields** | Object mutation with dot-notation, `keepOnlySet`, and binary preservation |
-| **HTTP Request** | Native `fetch()` with headers, JSON body, and error handling |
+| **HTTP Request** | Native `fetch()` with JSON headers and JSON or multipart form bodies |
 | **Aggregate** | In-memory item aggregation |
 | **Split Out** | Expands nested arrays into individual `N8nItem[]` items |
 | **Merge** | Appends branches or combines items by position across up to ten destination ports |
@@ -205,6 +205,12 @@ Each delivery triggers the branch with message fields, properties, and text (or 
 The compiler supports `File / Download` from S3 node v1. Set `S3_ENDPOINT`, `AWS_ACCESS_KEY_ID`, and `AWS_SECRET_ACCESS_KEY` at runtime (optional `AWS_REGION`, defaulting to `us-east-1`, and `AWS_SESSION_TOKEN`). Path-style addressing is enabled by default; set `S3_FORCE_PATH_STYLE=false` for virtual-hosted addressing.
 
 Each object is downloaded in order and stored as base64 under the configured binary property (`data` by default), preserving input JSON and other binary fields. The generated `package.json` includes `@aws-sdk/client-s3` and `mime-types` automatically when a workflow uses this node.
+
+## 📤 HTTP Request Multipart
+
+`HTTP Request` supports multipart text fields and n8n binary-file fields for `POST`, `PUT`, and `PATCH`. Binary fields read inline base64 data from the selected binary property and preserve file name and MIME type; the runtime removes manual `content-type` and `content-length` headers so `FormData` computes the boundary automatically.
+
+With `Send Headers` enabled, `specifyHeaders: 'json'` accepts either a JSON string or an object of header names and values.
 
 ---
 

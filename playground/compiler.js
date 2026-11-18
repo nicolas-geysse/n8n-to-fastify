@@ -412,6 +412,44 @@
     }`;
   }
 
+  // src/compiler/mappers/http-request.ts
+  function usesMultipartBody(params) {
+    return params?.sendBody === true && params.contentType === "multipart-form-data";
+  }
+  function usesJsonHeaders(params) {
+    return params?.sendHeaders === true && params.specifyHeaders === "json";
+  }
+  function getMultipartIssue(params) {
+    const method = (params.method ?? "GET").toUpperCase();
+    if (!["POST", "PUT", "PATCH"].includes(method)) {
+      return "HTTP Request multipart supports POST, PUT and PATCH";
+    }
+    const parts = params.bodyParameters?.parameters ?? [];
+    if (!Array.isArray(parts))
+      return "HTTP Request multipart needs an array of form fields";
+    for (const part of parts) {
+      if (typeof part?.name !== "string" || !part.name)
+        return "HTTP Request multipart fields require a name";
+      if (part.parameterType === "formBinaryData") {
+        if (typeof part.inputDataFieldName !== "string" || !part.inputDataFieldName) {
+          return "HTTP Request multipart binary fields require an input binary property";
+        }
+      } else if (part.parameterType && !["formData", "text"].includes(part.parameterType)) {
+        return "HTTP Request multipart supports text and binary form fields";
+      }
+    }
+  }
+  function generateMultipartBody(params) {
+    const parts = params.bodyParameters?.parameters ?? [];
+    const fields = parts.map((part) => {
+      const name = ExpressionParser.parse(part.name);
+      const valueKey = part.parameterType === "formBinaryData" ? "binaryProperty" : "value";
+      const value = ExpressionParser.parse(part.parameterType === "formBinaryData" ? part.inputDataFieldName : part.value);
+      return `{ name: String(${name} ?? ''), ${valueKey}: String(${value} ?? '') }`;
+    });
+    return `createRequestForm(item, [${fields.join(", ")}])`;
+  }
+
   // src/compiler/mappers/index.ts
   class NodeMappers {
     static mapNode(ctx) {
@@ -738,13 +776,22 @@
       const prevVar = ctx.previousVariableName || "inputItems";
       const method = (params.method || "GET").toUpperCase();
       const urlExpr = ExpressionParser.parse(params.url || "");
+      const multipart = usesMultipartBody(params);
+      const jsonHeaders = usesJsonHeaders(params);
       let headersObj = "{}";
-      if (params.headerParameters?.parameters && Array.isArray(params.headerParameters.parameters)) {
+      if (jsonHeaders) {
+        headersObj = `parseRequestHeaders(${ExpressionParser.parse(params.jsonHeaders ?? "{}")})`;
+      } else if (params.headerParameters?.parameters && Array.isArray(params.headerParameters.parameters)) {
         const pairs = params.headerParameters.parameters.filter((p) => p.name).map((p) => `${JSON.stringify(p.name)}: ${ExpressionParser.parse(p.value)}`);
         headersObj = `{ ${pairs.join(", ")} }`;
       }
       let bodySnippet = "undefined";
-      if (["POST", "PUT", "PATCH"].includes(method)) {
+      if (multipart) {
+        const issue = getMultipartIssue(params);
+        if (issue)
+          throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
+        bodySnippet = generateMultipartBody(params);
+      } else if (["POST", "PUT", "PATCH"].includes(method)) {
         if (params.jsonBody) {
           bodySnippet = `JSON.stringify(${ExpressionParser.parse(params.jsonBody)})`;
         } else if (params.bodyParameters?.parameters && Array.isArray(params.bodyParameters.parameters)) {
@@ -752,17 +799,27 @@
           bodySnippet = `JSON.stringify({ ${pairs.join(", ")} })`;
         }
       }
+      let headersSnippet = `const reqHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...${headersObj} };`;
+      if (multipart) {
+        const formHeaders = jsonHeaders ? headersObj : `new Headers(${headersObj})`;
+        headersSnippet = `const reqHeaders = ${formHeaders};
+      reqHeaders.delete('content-type');
+      reqHeaders.delete('content-length');`;
+      } else if (jsonHeaders) {
+        headersSnippet = `const reqHeaders = ${headersObj};
+      if (!reqHeaders.has('content-type')) reqHeaders.set('content-type', 'application/json');`;
+      }
       return `
     // [Node: ${ctx.node.name}] Native HTTP Request (${method})
     ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
       const item = currentItem;
       const targetUrl = ${urlExpr};
-      const reqHeaders: Record<string, string> = { 'Content-Type': 'application/json', ...${headersObj} };
+      ${headersSnippet}
       const reqBody = ${bodySnippet};
       const res = await fetch(targetUrl, {
         method: ${JSON.stringify(method)},
         headers: reqHeaders,
-        ...(reqBody !== undefined ? { body: typeof reqBody === 'string' ? reqBody : JSON.stringify(reqBody) } : {})
+        ...(reqBody !== undefined ? { body: reqBody } : {})
       });
       const text = await res.text();
       let data: any;
@@ -933,10 +990,12 @@
 ` : "";
       const s3Import = wf.nodes.some((node) => node.type === s3NodeType) ? `import { downloadS3Files } from '${runtimePrefix}/s3';
 ` : "";
+      const httpRequestImport = wf.nodes.some((node) => node.type.includes("httpRequest") && (usesMultipartBody(node.parameters) || usesJsonHeaders(node.parameters))) ? `import { createRequestForm, parseRequestHeaders } from '${runtimePrefix}/http-request';
+` : "";
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${rabbitMqImport}${s3Import}
+${positionMergeImport}${rabbitMqImport}${s3Import}${httpRequestImport}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),
