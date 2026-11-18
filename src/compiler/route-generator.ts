@@ -1,6 +1,7 @@
 import { ParsedWorkflow } from './parser';
 import { CodeGenerator } from './code-generator';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
+import { getRabbitMqTriggers, parseRabbitMqTrigger } from './rabbitmq-trigger';
 
 export class RouteGenerator {
   /**
@@ -23,11 +24,25 @@ import { WorkflowContext } from '../runtime/workflow-context';
     });
 
     let routeDefinitions = '';
+    const rabbitMqStarts: string[] = [];
     const registeredRoutes = new Set<string>();
 
     workflows.forEach((wf) => {
       const functionName = `workflow_${CodeGenerator.sanitizeIdentifier(wf.fileName)}`;
       const webhooks = wf.nodes.filter((node) => node.type.includes('webhook'));
+
+      for (const node of getRabbitMqTriggers(wf)) {
+        const options = parseRabbitMqTrigger(node);
+        if (typeof options === 'string') {
+          throw new Error(`Workflow ${JSON.stringify(wf.name)}, node ${JSON.stringify(node.name)}: ${options}`);
+        }
+        const logContext = JSON.stringify({ workflowId: wf.id, node: node.name });
+        rabbitMqStarts.push(`      stopConsumers.push(await startRabbitMqConsumer(
+        ${JSON.stringify(options)},
+        (items) => ${functionName}(items, undefined, ${JSON.stringify(node.name)}),
+        (message) => fastify.log.error(${logContext}, message),
+      ));`);
+      }
 
       webhooks.forEach((node) => {
         const rawPath = (node.parameters?.path || wf.fileName).toLowerCase().trim().replace(/^\/+/, '');
@@ -90,6 +105,25 @@ import { WorkflowContext } from '../runtime/workflow-context';
       });
     });
 
+    if (rabbitMqStarts.length > 0) {
+      imports += "import { startRabbitMqConsumer } from '../runtime/rabbitmq';\n";
+      routeDefinitions += `
+  const stopConsumers: Array<() => Promise<void>> = [];
+  const closeConsumers = async () => {
+    await Promise.allSettled(stopConsumers.splice(0).map(stop => stop()));
+  };
+  fastify.addHook('onReady', async () => {
+    try {
+${rabbitMqStarts.join('\n')}
+    } catch (error) {
+      await closeConsumers();
+      throw error;
+    }
+  });
+  fastify.addHook('onClose', closeConsumers);
+`;
+    }
+
     return `${imports}
 // Prevent bundler/runtime tree-shaking so subworkflows self-register into WorkflowRegistry
 const _registeredWorkflows = [${importedFunctions.join(', ')}];
@@ -104,7 +138,18 @@ ${routeDefinitions}
   /**
    * Generates the standalone server.ts entry point.
    */
-  static generateServerEntry(): string {
+  static generateServerEntry(workflows: ParsedWorkflow[] = []): string {
+    const shutdown = workflows.some(workflow => getRabbitMqTriggers(workflow).length > 0)
+      ? `
+  const close = () => {
+    void fastify.close().catch(error => {
+      fastify.log.error(error);
+      process.exitCode = 1;
+    });
+  };
+  process.once('SIGINT', close);
+  process.once('SIGTERM', close);`
+      : '';
     return `import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { registerCompiledRoutes } from './routes/index';
@@ -130,7 +175,7 @@ const host = process.env.HOST || '0.0.0.0';
 
 try {
   await fastify.listen({ port, host });
-  console.log(\`⚡ [n8n-to-fastify] Microservice online at http://\${host}:\${port}\`);
+  console.log(\`⚡ [n8n-to-fastify] Microservice online at http://\${host}:\${port}\`);${shutdown}
 } catch (err) {
   fastify.log.error(err);
   process.exit(1);
@@ -143,6 +188,7 @@ try {
    */
   static generateOutputPackageJson(workflows: ParsedWorkflow[] = []): string {
     const needsRabbitMq = workflows.some((workflow) =>
+      getRabbitMqTriggers(workflow).length > 0 ||
       workflow.nodes.some((node) => node.type === rabbitMqPublisherType)
     );
     return JSON.stringify(

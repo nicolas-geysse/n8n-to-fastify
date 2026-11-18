@@ -1,0 +1,157 @@
+import { expect, test } from 'bun:test';
+import fs from 'fs';
+import { createRequire } from 'node:module';
+import os from 'os';
+import path from 'path';
+import Fastify from 'fastify';
+import { parseRabbitMqTrigger, rabbitMqTriggerType } from '../src/compiler/rabbitmq-trigger';
+
+test('RabbitMQ Trigger accepts a queue declaration and rejects unsupported acknowledgement modes', () => {
+  const node = {
+    id: 'consumer',
+    name: 'Consume',
+    type: rabbitMqTriggerType,
+    typeVersion: 1,
+    position: [0, 0] as [number, number],
+    parameters: {
+      queue: 'jobs',
+      options: { acknowledge: 'executionFinishesSuccessfully', assertQueue: true, durable: false },
+    },
+  };
+  expect(parseRabbitMqTrigger(node)).toMatchObject({
+    queue: 'jobs', declareQueue: { durable: false },
+  });
+  node.parameters.options.acknowledge = 'immediately';
+  expect(parseRabbitMqTrigger(node)).toBe(
+    'RabbitMQ Trigger needs the executionFinishesSuccessfully acknowledgement mode',
+  );
+});
+
+test('the generated RabbitMQ v1 trigger settles deliveries after execution and drains on close', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'n2f-rabbitmq-trigger-'));
+  const service = path.join(dir, 'service');
+  const fastify = Fastify();
+  const previousUrl = process.env.RABBITMQ_URL;
+  let releaseWorkflow: (() => void) | undefined;
+  try {
+    const input = path.join(dir, 'consumer.json');
+    fs.writeFileSync(input, JSON.stringify({
+      nodes: [
+        {
+          name: 'Consume',
+          type: 'n8n-nodes-base.rabbitmqTrigger',
+          typeVersion: 1,
+          parameters: { queue: 'jobs', options: {
+            acknowledge: 'executionFinishesSuccessfully',
+            parallelMessages: 1,
+            jsonParseBody: true,
+            binding: { bindings: [{ exchange: 'events', routingKey: 'job' }] },
+          } },
+        },
+        {
+          name: 'Disabled consumer',
+          type: 'n8n-nodes-base.rabbitmqTrigger',
+          typeVersion: 1,
+          disabled: true,
+          parameters: { queue: 'disabled' },
+        },
+        {
+          name: 'Work',
+          type: 'n8n-nodes-base.code',
+          parameters: { jsCode: 'await require("amqplib").execute($json); return $input.all();' },
+        },
+        ...['Disabled work', 'Unconnected work'].map(name => ({
+          name, type: 'n8n-nodes-base.code',
+          parameters: { jsCode: 'throw new Error("unexpected node execution");' },
+        })),
+      ],
+      connections: {
+        Consume: { main: [[{ node: 'Work', type: 'main', index: 0 }]] },
+        'Disabled consumer': { main: [[{ node: 'Disabled work', type: 'main', index: 0 }]] },
+      },
+    }));
+    const compile = Bun.spawnSync([
+      process.execPath, path.resolve('bin/cli.ts'), 'compile', input, '--out', service, '--strict',
+    ]);
+    expect(compile.exitCode).toBe(0);
+    const manifest = JSON.parse(fs.readFileSync(path.join(service, 'package.json'), 'utf8'));
+    expect(manifest.dependencies.amqplib).toBeDefined();
+
+    const broker = path.join(service, 'node_modules', 'amqplib');
+    fs.mkdirSync(broker, { recursive: true });
+    fs.writeFileSync(path.join(broker, 'package.json'), '{"main":"index.cjs"}');
+    fs.writeFileSync(path.join(broker, 'index.cjs'), `
+      const events = exports.events = [];
+      let deliver;
+      exports.deliver = (content) => deliver({
+        content: Buffer.from(JSON.stringify(content)),
+        fields: { routingKey: 'job' },
+        properties: { contentType: 'application/json' },
+      });
+      exports.connect = async () => ({
+        on() {},
+        async createChannel() {
+          return {
+            on() {},
+            async checkQueue(queue) { events.push(['check', queue]); },
+            async bindQueue(...args) { events.push(['bind', ...args]); },
+            async prefetch(count) { events.push(['prefetch', count]); },
+            async consume(queue, callback) {
+              events.push(['consume', queue]);
+              deliver = callback;
+              return { consumerTag: 'test-consumer' };
+            },
+            ack(message) { events.push(['ack', message.fields.routingKey]); },
+            nack(message, allUpTo, requeue) { events.push(['nack', allUpTo, requeue]); },
+            async cancel(tag) { events.push(['cancel', tag]); },
+            async close() { events.push(['close channel']); },
+          };
+        },
+        async close() { events.push(['close']); },
+      });
+    `);
+
+    const client = createRequire(path.join(service, 'server.ts'))('amqplib');
+    client.execute = async (json: unknown) => {
+      client.events.push(['execute', json]);
+      throw new Error('fixture error');
+    };
+    process.env.RABBITMQ_URL = 'amqp://localhost';
+    const routes = await import(path.join(service, 'routes', 'index.ts'));
+    await fastify.register(routes.registerCompiledRoutes);
+    await fastify.ready();
+    expect(client.events).toEqual([
+      ['check', 'jobs'], ['bind', 'jobs', 'events', 'job'], ['prefetch', 1], ['consume', 'jobs'],
+    ]);
+
+    client.deliver({ id: 'failure' });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(client.events.at(-1)).toEqual(['nack', false, true]);
+
+    const gate = new Promise<void>(resolve => { releaseWorkflow = resolve; });
+    client.execute = async (json: unknown) => {
+      client.events.push(['execute', json]);
+      await gate;
+    };
+    client.deliver({ id: 'success' });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(client.events.at(-1)).toEqual(['execute', {
+      content: { id: 'success' },
+      fields: { routingKey: 'job' },
+      properties: { contentType: 'application/json' },
+    }]);
+
+    const closing = fastify.close();
+    await new Promise(resolve => setImmediate(resolve));
+    expect(client.events.at(-1)).toEqual(['cancel', 'test-consumer']);
+    releaseWorkflow!();
+    await closing;
+    expect(client.events.slice(-3)).toEqual([['ack', 'job'], ['close channel'], ['close']]);
+  } finally {
+    releaseWorkflow?.();
+    await fastify.close().catch(() => {});
+    if (previousUrl === undefined) delete process.env.RABBITMQ_URL;
+    else process.env.RABBITMQ_URL = previousUrl;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

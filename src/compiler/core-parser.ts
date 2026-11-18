@@ -1,3 +1,5 @@
+import { rabbitMqTriggerType } from './rabbitmq-trigger';
+
 export interface N8nNode {
   id: string;
   name: string;
@@ -68,6 +70,7 @@ export class CoreWorkflowParser {
 
     const triggers = nodes.filter(
       (node) =>
+        node.type === rabbitMqTriggerType ||
         node.type.includes('webhook') ||
         node.type.includes('trigger') ||
         node.type.includes('cron')

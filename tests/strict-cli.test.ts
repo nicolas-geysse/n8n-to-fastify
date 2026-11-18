@@ -13,7 +13,7 @@ test('strict compile reports known incompatibilities before writing output', () 
     fs.writeFileSync(input, JSON.stringify({
       name: 'Compatibility fixture',
       nodes: [
-        { name: 'Trigger', type: 'n8n-nodes-base.rabbitmqTrigger', parameters: {} },
+        { name: 'Trigger', type: 'example-nodes.trigger', parameters: {} },
         { name: 'Note', type: 'n8n-nodes-base.stickyNote', parameters: {} },
         {
           name: 'Legacy Code',
