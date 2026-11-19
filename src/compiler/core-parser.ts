@@ -41,6 +41,7 @@ export interface ParsedWorkflow {
   connections: Record<string, any>;
   orderedNodes: N8nNode[];
   triggers: N8nNode[];
+  useCanvasOrder?: boolean;
   pollingLoops?: PollingLoop[];
 }
 
@@ -133,6 +134,7 @@ export class CoreWorkflowParser {
       connections,
       orderedNodes,
       triggers,
+      useCanvasOrder,
       pollingLoops,
     };
   }
