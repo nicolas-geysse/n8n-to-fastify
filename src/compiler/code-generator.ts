@@ -5,7 +5,7 @@ import { mapCommunityNode, selectCommunityAdapters, type CommunityAdapter } from
 import { emitPollingLoop } from './polling-code';
 import { getDisabledNodeMode } from './disabled-node';
 import { isPositionMerge } from './mappers/position-merge';
-import { collectLegacyNodePorts, usesLegacyNodeReferences } from './mappers/code-context';
+import { collectLegacyNodePorts, isCodeNode, usesLegacyNodeReferences } from './mappers/code-context';
 import { isRawEditFields, usesRawLegacyNodeReferences } from './mappers/raw-edit-fields';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
 import { s3NodeType } from './mappers/s3';
@@ -35,6 +35,9 @@ export class CodeGenerator {
     const runtimePrefix = '../'.repeat(depth + 1) + 'runtime';
     const httpContinuationImport = wf.nodes.some(node => !node.disabled && continuesHttpOnRegularOutput(node))
       ? `import { fetchForRegularOutput, settleHttpItems } from '${runtimePrefix}/http-regular-output';\n`
+      : '';
+    const codeHttpRequestImport = wf.nodes.some(isCodeNode)
+      ? `import { codeHttpRequest } from '${runtimePrefix}/code-http-request';\n`
       : '';
     const positionMergeImport = wf.nodes.some(isPositionMerge)
       ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';\n`
@@ -97,7 +100,7 @@ export class CodeGenerator {
       ? `import { createResponseTimeout } from '${runtimePrefix}/http-request';\n`
       : '';
 
-    const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
+    const imports = `${codeHttpRequestImport}import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 ${communityImports}import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
 ${httpStatusImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
@@ -212,8 +215,7 @@ ${nodeCode.trim()}
       } else if (hasEventTrigger) {
         branchCheckStr = `entryNode === undefined && ${branchCheckStr}`;
       }
-      bodyCode += this.generateNodeBlock(wf.id, node, branchCheckStr, nodeCode,
-        ancestorTriggers.length > 0 ? '      ' : '    ');
+      bodyCode += this.generateNodeBlock(wf.id, node, branchCheckStr, nodeCode);
     });
 
     const lastNodeName = wf.orderedNodes
@@ -248,15 +250,14 @@ registerWorkflow(${JSON.stringify(keys)}, ${functionName});
     node: N8nNode,
     condition: string,
     nodeCode: string,
-    nodeIndent = '    ',
   ): string {
     const traceArgs = [workflowId, node.id || node.name, node.name].map(value => JSON.stringify(value)).join(', ');
-    // Keep the previous indentation because it also affects multiline JavaScript literals.
-    const body = nodeIndent + nodeCode.trim().replace(/\n/g, `\n${nodeIndent}`);
+    // Prefix the block without changing whitespace inside multiline JavaScript literals.
+    const body = nodeCode.trim();
     return `  if (${condition}) {
     const finishTrace = ctx.startNodeTrace(${traceArgs});
     try {
-${body}
+      ${body}
     } catch (error) {
       finishTrace?.('error');
       throw error;

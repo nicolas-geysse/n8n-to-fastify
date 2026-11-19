@@ -335,7 +335,8 @@
       const schedule = pollingLoops.length ? projectPollingSchedule(nodes, connections, pollingLoops) : { nodes, connections };
       const entryGroups = new Map(pollingLoops.map((loop) => [loop.entry, loop.nodes]));
       const nodeByName = new Map(nodes.map((node) => [node.name, node]));
-      const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections).flatMap((node) => entryGroups.get(node.name)?.map((name) => nodeByName.get(name)) ?? [node]);
+      const useCanvasOrder = json.settings?.executionOrder === "v1";
+      const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections, useCanvasOrder).flatMap((node) => entryGroups.get(node.name)?.map((name) => nodeByName.get(name)) ?? [node]);
       return {
         id,
         name,
@@ -348,7 +349,7 @@
         pollingLoops
       };
     }
-    static topologicalSort(nodes, connections) {
+    static topologicalSort(nodes, connections, useCanvasOrder) {
       const nodeMap = new Map;
       const adjList = new Map;
       nodes.forEach((node) => {
@@ -381,6 +382,13 @@
         visiting.add(nodeName);
         pathStack.push(nodeName);
         const neighbors = adjList.get(nodeName) || [];
+        if (useCanvasOrder) {
+          neighbors.sort((a, b) => {
+            const [ax, ay] = nodeMap.get(a)?.position ?? [0, 0];
+            const [bx, by] = nodeMap.get(b)?.position ?? [0, 0];
+            return by - ay || bx - ax;
+          });
+        }
         for (const neighbor of neighbors) {
           dfs(neighbor, pathStack);
         }
@@ -412,7 +420,7 @@
     }
   }
 
-  // node_modules/js-tokens/index.js
+  // ../n2f-review/integration/node_modules/js-tokens/index.js
   var HashbangComment;
   var Identifier;
   var JSXIdentifier;
@@ -978,8 +986,11 @@
   }
 
   // src/compiler/mappers/code-context.ts
+  function isCodeNode(node) {
+    return node.type.includes("code") || node.type.includes("function");
+  }
   function usesLegacyNodeReferences(node) {
-    if (!node.type.includes("code") && !node.type.includes("function"))
+    if (!isCodeNode(node))
       return false;
     const code = node.parameters?.jsCode || node.parameters?.functionCode;
     return typeof code === "string" && /\$node\b/.test(code);
@@ -1410,7 +1421,7 @@
       if (type.includes("respondToWebhook")) {
         return this.mapRespondToWebhookNode(ctx);
       }
-      if (type.includes("code") || type.includes("function")) {
+      if (isCodeNode(ctx.node)) {
         return this.mapCodeNode(ctx);
       }
       if (type.includes("executeWorkflowTrigger")) {
@@ -1508,9 +1519,9 @@
       const itemsBinding = /\bitems\b/.test(rawCode) ? `      const items = currentItems;
 ` : "";
       const runCode = `
-${legacyItemsBinding}      const result = await (async () => {
+${legacyItemsBinding}      const result = await (async function (this: { helpers: { httpRequest: typeof codeHttpRequest } }) {
         ${transformedCode}
-      })();
+      }).call({ helpers: { httpRequest: codeHttpRequest } });
       return n8n.normalizeItems(result);`;
       const execution = continuesCodeOnRegularOutput(ctx.node) ? `
       try {${runCode}
@@ -2082,6 +2093,8 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       const runtimePrefix = "../".repeat(depth + 1) + "runtime";
       const httpContinuationImport = wf.nodes.some((node) => !node.disabled && continuesHttpOnRegularOutput(node)) ? `import { fetchForRegularOutput, settleHttpItems } from '${runtimePrefix}/http-regular-output';
 ` : "";
+      const codeHttpRequestImport = wf.nodes.some(isCodeNode) ? `import { codeHttpRequest } from '${runtimePrefix}/code-http-request';
+` : "";
       const positionMergeImport = wf.nodes.some(isPositionMerge) ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';
 ` : "";
       const communityImports = communityNodes.size > 0 ? [
@@ -2121,7 +2134,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
 ` : "";
       const httpTimeoutImport = wf.nodes.some((node) => node.type.includes("httpRequest")) ? `import { createResponseTimeout } from '${runtimePrefix}/http-request';
 ` : "";
-      const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
+      const imports = `${codeHttpRequestImport}import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 ${communityImports}import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
 ${httpStatusImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
@@ -2223,7 +2236,7 @@ ${nodeCode.trim()}
         } else if (hasEventTrigger) {
           branchCheckStr = `entryNode === undefined && ${branchCheckStr}`;
         }
-        bodyCode += this.generateNodeBlock(wf.id, node, branchCheckStr, nodeCode, ancestorTriggers.length > 0 ? "      " : "    ");
+        bodyCode += this.generateNodeBlock(wf.id, node, branchCheckStr, nodeCode);
       });
       const lastNodeName = wf.orderedNodes.filter((node) => disabledModes.get(node) !== "skip" && (node.type !== stopAndErrorType || node.disabled)).at(-1)?.name;
       const returnItemsExpr = lastNodeName ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])` : `inputItems`;
@@ -2245,14 +2258,13 @@ ${bodyCode}
 registerWorkflow(${JSON.stringify(keys)}, ${functionName});
 `;
     }
-    static generateNodeBlock(workflowId, node, condition, nodeCode, nodeIndent = "    ") {
+    static generateNodeBlock(workflowId, node, condition, nodeCode) {
       const traceArgs = [workflowId, node.id || node.name, node.name].map((value) => JSON.stringify(value)).join(", ");
-      const body = nodeIndent + nodeCode.trim().replace(/\n/g, `
-${nodeIndent}`);
+      const body = nodeCode.trim();
       return `  if (${condition}) {
     const finishTrace = ctx.startNodeTrace(${traceArgs});
     try {
-${body}
+      ${body}
     } catch (error) {
       finishTrace?.('error');
       throw error;
