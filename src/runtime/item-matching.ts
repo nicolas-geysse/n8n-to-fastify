@@ -8,14 +8,10 @@ interface BatchOrigin {
 
 interface BatchParents {
   input: N8nItem[];
-  rows: Array<number | undefined>;
+  rows: Array<number[] | undefined>;
 }
 
 function pairedIndex(value: unknown): number | undefined {
-  if (Array.isArray(value)) {
-    if (value.length !== 1) return;
-    [value] = value;
-  }
   if (typeof value === 'number') return value;
   if (value && typeof value === 'object' && 'item' in value && typeof value.item === 'number' &&
       (!('input' in value) || value.input === undefined || value.input === 0) && !('sourceOverwrite' in value)) {
@@ -50,28 +46,49 @@ export class ItemMatching {
     const identities = new Map<N8nItem, number | undefined>();
     original.forEach((item, index) => identities.set(item, identities.has(item) ? undefined : index));
     const rows = output.map((item, index) => {
-      if (item.pairedItem !== undefined) return pairedIndex(item.pairedItem);
-      if (identities.has(item)) return identities.get(item);
-      if (original.length === 1) return 0;
-      if (original.length === output.length) return index;
+      if (item.pairedItem !== undefined) {
+        const pairs = Array.isArray(item.pairedItem) ? item.pairedItem : [item.pairedItem];
+        const indices = pairs.map(pairedIndex);
+        if (indices.length && indices.every((row): row is number => row !== undefined)) return indices;
+        return;
+      }
+      if (identities.has(item)) {
+        const row = identities.get(item);
+        return row === undefined ? undefined : [row];
+      }
+      if (original.length === 1) return [0];
+      if (original.length === output.length) return [index];
     });
     runs.set(nodeName, { input, rows });
   }
 
   public resolve(nodeName: string, input: N8nItem[], index: number): N8nItem {
-    const seen = new Set<N8nItem[]>();
-    let batch = input;
-    let row: number | undefined = index;
-    while (!seen.has(batch) && row !== undefined && Number.isSafeInteger(row) && row >= 0) {
+    const seen = new WeakMap<N8nItem[], Set<number>>();
+    const pending = [{ batch: input, row: index }];
+    let match: { output: N8nItem[]; row: number } | undefined;
+    while (pending.length) {
+      const { batch, row } = pending.pop()!;
       const origin = this.origins.get(batch);
-      if (!origin || row >= origin.output.length) break;
-      if (origin.nodeName === nodeName) return origin.output[row];
+      if (!origin || !Number.isSafeInteger(row) || row < 0 || row >= origin.output.length) {
+        throw new Error('Cannot resolve a unique linked item');
+      }
+      let visited = seen.get(batch);
+      if (!visited) seen.set(batch, visited = new Set());
+      if (visited.has(row)) continue;
+      visited.add(row);
+      if (origin.nodeName === nodeName) {
+        if (match && (match.output !== origin.output || match.row !== row)) {
+          throw new Error('Cannot resolve a unique linked item');
+        }
+        match = { output: origin.output, row };
+        continue;
+      }
       const parent = this.parents.get(origin.output)?.get(origin.nodeName);
-      if (!parent) break;
-      seen.add(batch);
-      batch = parent.input;
-      row = parent.rows[row];
+      const rows = parent?.rows[row];
+      if (!parent || !rows) throw new Error('Cannot resolve a unique linked item');
+      for (const previous of rows) pending.push({ batch: parent.input, row: previous });
     }
+    if (match) return match.output[match.row];
     throw new Error('Cannot resolve a unique linked item');
   }
 }

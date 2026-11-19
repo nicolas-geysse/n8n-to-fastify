@@ -79,3 +79,46 @@ test('itemMatching uses the active connection when sibling nodes forward the sam
     ]);
   });
 });
+
+test('itemMatching accepts multiple links that converge on the same source item', async () => {
+  await withWorkflow({
+    nodes: [
+      code('Source', 'return $input.all();'),
+      code('Duplicate', 'return [0, 0].map(item => ({ json: {}, pairedItem: { item } }));'),
+      code('Combine', 'return [{ json: {}, pairedItem: [{ item: 0 }, { item: 1 }] }];'),
+      code('Read', "return [{ json: $('Source').itemMatching(0).json }];"),
+    ],
+    connections: { Source: connect('Duplicate'), Duplicate: connect('Combine'), Combine: connect('Read') },
+  }, async output => {
+    const { workflow_linked } = await import(path.join(output, 'workflows', 'linked.ts'));
+    const result = await workflow_linked([{ json: { id: 'parent' } }]);
+    expect(result.items).toEqual([{ json: { id: 'parent' } }]);
+  });
+});
+
+test('Split Out keeps the parent of each child when input and output counts match', async () => {
+  await withWorkflow({
+    nodes: [
+      code('Source', 'return $input.all();'),
+      {
+        name: 'Split', type: 'n8n-nodes-base.splitOut', typeVersion: 1, parameters: { fieldToSplitOut: 'children' },
+      },
+      code('Read', `
+return $input.all().map((row, index) => ({
+  json: { child: row.json.child, parent: $('Source').itemMatching(index).json.id },
+}));
+`),
+    ],
+    connections: { Source: connect('Split'), Split: connect('Read') },
+  }, async output => {
+    const { workflow_linked } = await import(path.join(output, 'workflows', 'linked.ts'));
+    const result = await workflow_linked([
+      { json: { id: 'A', children: [{ child: 'one' }, { child: 'two' }] } },
+      { json: { id: 'B', children: [] } },
+    ]);
+    expect(result.items).toEqual([
+      { json: { child: 'one', parent: 'A' } },
+      { json: { child: 'two', parent: 'A' } },
+    ]);
+  });
+});

@@ -1005,7 +1005,7 @@
         itemMatching: (index: number) => ctx.getLinkedItem(name, currentItems, index),
       });
 ` : "";
-      const transformedCode = rawCode.replace(/\$input\.all\(\)/g, "currentItems").replace(/\$input\.first\(\)/g, "(currentItems[0] || { json: {} })").replace(/\$input\.item/g, "(currentItems[0] || { json: {} })").replace(/\$json/g, "(currentItems[0]?.json || {})").replace(/\$\(['"](.*?)['"]\)\.first\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.first() || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.item(?![\w$])/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.item || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.all\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.all() || [])`).replace(/\$now/g, "DateTime.now()");
+      const transformedCode = rawCode.replace(/\$input\.all\(\)/g, "currentItems").replace(/\$input\.first\(\)/g, "(currentItems[0] || { json: {} })").replace(/\$input\.item/g, "(currentItems[0] || { json: {} })").replace(/\$json/g, "(currentItems[0]?.json || {})").replace(/\$\(['"](.*?)['"]\)\.first\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.first() || { json: {} })`).replace(/\$\((['"])((?:\\.|(?!\1)[^\\\r\n])*)\1\)\.item(?![\w$])/g, (_, _quote, n) => `(ctx.getNode(${JSON.stringify(n)})?.item || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.all\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.all() || [])`).replace(/\$now/g, "DateTime.now()");
       const runCode = `
       const result = await (async () => {
         ${transformedCode}
@@ -1326,11 +1326,14 @@ ${legacyBinding}${matchingBinding}${execution}
     {
       const source = ${prevVar} || inputItems;
       const expanded: N8nItem[] = [];
-      for (const entry of source) {
+      for (const [index, entry] of source.entries()) {
         const arr = entry.json?.[${JSON.stringify(fieldToSplit)}];
         if (Array.isArray(arr)) {
           for (const el of arr) {
-            expanded.push({ json: typeof el === 'object' && el !== null ? el : { [${JSON.stringify(fieldToSplit)}]: el } });
+            expanded.push({
+              pairedItem: { item: index },
+              json: typeof el === 'object' && el !== null ? el : { [${JSON.stringify(fieldToSplit)}]: el },
+            });
           }
         }
       }
