@@ -46,17 +46,18 @@ test('compiled workflows skip detached disabled nodes and pass through connected
   }
 });
 
-test('a disabled root with an output does not activate its branch', async () => {
+test.each([false, true])('a disabled root with an output does not activate its branch (disabled first: %s)', async disabledFirst => {
   const dir = mkdtempSync(path.join(tmpdir(), 'n2f-disabled-root-'));
   try {
     const input = path.join(dir, 'root.json');
     const output = path.join(dir, 'service');
     const link = (node: string) => ({ main: [[{ node, type: 'main', index: 0 }]] });
+    const start = { name: 'Start', type: 'n8n-nodes-base.webhook', parameters: { path: 'fixture' } };
+    const detached = { name: 'Detached', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, disabled: true, parameters: { url: 'invalid' } };
     writeFileSync(input, JSON.stringify({
       settings: { executionOrder: 'v1' },
       nodes: [
-        { name: 'Start', type: 'n8n-nodes-base.webhook', parameters: { path: 'fixture' } },
-        { name: 'Detached', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2, disabled: true, parameters: { url: 'invalid' } },
+        ...(disabledFirst ? [detached, start] : [start, detached]),
         { name: 'Live', type: 'n8n-nodes-base.code', typeVersion: 2, parameters: { jsCode: 'return $input.all();' } },
         { name: 'Inactive', type: 'n8n-nodes-base.code', typeVersion: 2, parameters: { jsCode: 'throw new Error("inactive branch");' } },
       ],
@@ -78,7 +79,6 @@ test('a disabled root with an output does not activate its branch', async () => 
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
 
 test('strict mode flags disabled nodes connected to secondary inputs', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'n2f-disabled-port-'));

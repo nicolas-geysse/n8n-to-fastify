@@ -1617,7 +1617,14 @@ ${nodeCode.trim()}
         }
         bodyCode += this.generateNodeBlock(wf.id, node, branchCheckStr, nodeCode, ancestorTriggers.length > 0 ? "      " : "    ");
       });
-      const lastNodeName = wf.orderedNodes.filter((node) => disabledModes.get(node) !== "skip" && (node.type !== stopAndErrorType || node.disabled)).at(-1)?.name;
+      const inactiveNodes = new Set;
+      for (const node of wf.orderedNodes) {
+        const incoming = node.incomingConnections ?? [];
+        if (disabledModes.get(node) === "skip" || incoming.length > 0 && incoming.every((connection) => inactiveNodes.has(connection.sourceNode))) {
+          inactiveNodes.add(node.name);
+        }
+      }
+      const lastNodeName = wf.orderedNodes.filter((node) => !inactiveNodes.has(node.name) && (node.type !== stopAndErrorType || node.disabled)).at(-1)?.name;
       const returnItemsExpr = lastNodeName ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])` : `inputItems`;
       const keys = Array.from(new Set([wf.id, wf.name, wf.fileName])).filter(Boolean);
       return `${imports}
