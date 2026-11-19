@@ -439,7 +439,7 @@ ${legacyBinding}${execution}
     const multipart = usesMultipartBody(params);
     const jsonHeaders = usesJsonHeaders(params);
     const legacyBinding = (index: string): string => ctx.legacyNodePorts
-      ? `const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)}, ${index});`
+      ? `const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)}, ${index}, batch);`
       : '';
 
 
@@ -480,7 +480,7 @@ ${legacyBinding}${execution}
       if (!reqHeaders.has('content-type')) reqHeaders.set('content-type', 'application/json');`;
     }
 
-    const callbackParameters = ctx.legacyNodePorts ? 'currentItem: N8nItem, index: number' : 'currentItem: N8nItem';
+    const callbackParameters = ctx.legacyNodePorts ? 'currentItem: N8nItem, index: number, batch: N8nItem[]' : 'currentItem: N8nItem';
     return `
     // [Node: ${ctx.node.name}] Native HTTP Request (${method})
     ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (${callbackParameters}) => {
