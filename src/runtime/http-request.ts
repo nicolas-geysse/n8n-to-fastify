@@ -1,4 +1,5 @@
 import type { N8nItem } from './n8n-helper';
+import { posix } from 'node:path';
 import { createBinaryData } from './binary-data';
 
 type RequestFormPart = { name: string } & ({ value: string } | { binaryProperty: string });
@@ -63,9 +64,12 @@ export async function readFileResponse(
   const mimeType = response.headers.get('content-type')?.split(';', 1)[0].trim() || 'application/octet-stream';
   const binary = createBinaryData(bytes, '', mimeType);
   const extension = binary.fileExtension;
-  const fileName = extension && requestUrl.endsWith('.' + extension)
-    ? requestUrl.split('/').pop()
-    : extension ? `${outputProperty}.${extension}` : undefined;
+  const urlFileName = new URL(requestUrl).pathname.split('/').at(-1) || undefined;
+  // A custom MIME type can still carry a useful filename in the URL.
+  const fileName = extension && !urlFileName?.endsWith('.' + extension)
+    ? `${outputProperty}.${extension}`
+    : urlFileName;
+  const fileExtension = extension ?? (fileName && (posix.extname(fileName).slice(1) || undefined));
 
   let json = item.json;
   if (includeResponseMetadata) {
@@ -77,7 +81,7 @@ export async function readFileResponse(
 
   return {
     json,
-    binary: { ...item.binary, [outputProperty]: { ...binary, fileName } },
+    binary: { ...item.binary, [outputProperty]: { ...binary, fileName, fileExtension } },
     pairedItem: { item: index },
   };
 }
