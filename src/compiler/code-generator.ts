@@ -72,6 +72,10 @@ export class CodeGenerator {
     const stopAndErrorImport = wf.nodes.some(node => node.type === stopAndErrorType)
       ? `import { createWorkflowStopError } from '${runtimePrefix}/stop-and-error';\n`
       : '';
+    const jsonBodyImport = wf.nodes.some(node =>
+      node.type.includes('httpRequest') && node.parameters?.jsonBody && !usesMultipartBody(node.parameters) &&
+      ['POST', 'PUT', 'PATCH'].includes((node.parameters.method ?? 'GET').toUpperCase())
+    ) ? `import { encodeJsonRequestBody } from '${runtimePrefix}/http-request';\n` : '';
 
     const httpStatusImport = wf.nodes.some(node => node.type.includes('httpRequest'))
       ? `import { fetchWithStatus } from '${runtimePrefix}/http-request';\n`
@@ -85,7 +89,7 @@ export class CodeGenerator {
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
 ${httpStatusImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
-${httpTimeoutImport}${legacyNames}
+${httpTimeoutImport}${jsonBodyImport}${legacyNames}
 ${retryImport}const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),

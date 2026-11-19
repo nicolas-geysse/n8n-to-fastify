@@ -1291,7 +1291,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
         bodySnippet = generateMultipartBody(params);
       } else if (["POST", "PUT", "PATCH"].includes(method)) {
         if (params.jsonBody) {
-          bodySnippet = `JSON.stringify(${ExpressionParser.parse(params.jsonBody)})`;
+          bodySnippet = `encodeJsonRequestBody(${ExpressionParser.parse(params.jsonBody)})`;
         } else if (params.bodyParameters?.parameters && Array.isArray(params.bodyParameters.parameters)) {
           const pairs = params.bodyParameters.parameters.filter((p) => p.name).map((p) => `${JSON.stringify(p.name)}: ${ExpressionParser.parse(p.value)}`);
           bodySnippet = `JSON.stringify({ ${pairs.join(", ")} })`;
@@ -1583,6 +1583,8 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
 ` : "";
       const stopAndErrorImport = wf.nodes.some((node) => node.type === stopAndErrorType) ? `import { createWorkflowStopError } from '${runtimePrefix}/stop-and-error';
 ` : "";
+      const jsonBodyImport = wf.nodes.some((node) => node.type.includes("httpRequest") && node.parameters?.jsonBody && !usesMultipartBody(node.parameters) && ["POST", "PUT", "PATCH"].includes((node.parameters.method ?? "GET").toUpperCase())) ? `import { encodeJsonRequestBody } from '${runtimePrefix}/http-request';
+` : "";
       const httpStatusImport = wf.nodes.some((node) => node.type.includes("httpRequest")) ? `import { fetchWithStatus } from '${runtimePrefix}/http-request';
 ` : "";
       const httpTimeoutImport = wf.nodes.some((node) => node.type.includes("httpRequest")) ? `import { createResponseTimeout } from '${runtimePrefix}/http-request';
@@ -1591,7 +1593,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
 ${httpStatusImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
-${httpTimeoutImport}${legacyNames}
+${httpTimeoutImport}${jsonBodyImport}${legacyNames}
 ${retryImport}const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),
