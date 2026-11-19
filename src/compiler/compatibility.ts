@@ -41,6 +41,7 @@ const supportedNodeTypes = new Set([
     'merge',
     'postgres',
     'wait',
+    'noOp',
   ].map(type => `n8n-nodes-base.${type}`),
   ...['openAi', 'googleGemini', 'chainLlm'].map(type => `@n8n/n8n-nodes-langchain.${type}`),
 ]);
@@ -96,6 +97,9 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow, adapters: reado
     if (node.type === rabbitMqTriggerType) {
       const options = parseRabbitMqTrigger(node);
       if (typeof options === 'string') report(node.name, options);
+    }
+    if (node.type === 'n8n-nodes-base.noOp' && (node.typeVersion ?? 1) !== 1) {
+      report(node.name, 'No Operation needs typeVersion 1');
     }
 
     const params = node.parameters ?? {};
