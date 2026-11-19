@@ -1,5 +1,18 @@
 import type { N8nNode } from '../core-parser';
 
+
+export function usesCodeItemMatching(node: N8nNode): boolean {
+  const code = node.parameters?.jsCode;
+  return node.type === 'n8n-nodes-base.code' && typeof code === 'string' && /\.\s*itemMatching\b/.test(code);
+}
+
+export function getCodeItemMatchingIssue(node: N8nNode): string | undefined {
+  if (usesCodeItemMatching(node) && ((node.parameters?.language ?? 'javaScript') !== 'javaScript' ||
+      (node.parameters?.mode ?? 'runOnceForAllItems') !== 'runOnceForAllItems')) {
+    return 'Code itemMatching requires JavaScript and Run Once for All Items';
+  }
+}
+
 export function isCodeNode(node: N8nNode): boolean {
   return node.type.includes('code') || node.type.includes('function');
 }

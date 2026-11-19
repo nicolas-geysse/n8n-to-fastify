@@ -3,7 +3,7 @@ import { usesNodeRetry } from './mappers/node-retry';
 import { selectCommunityAdapters, type CommunityAdapter } from './community-adapters';
 import { getDisabledNodeMode } from './disabled-node';
 import { getPositionMergeIssue, isPositionMerge } from './mappers/position-merge';
-import { getLegacyNodeReferenceIssue } from './mappers/code-context';
+import { getCodeItemMatchingIssue, getLegacyNodeReferenceIssue, usesCodeItemMatching } from './mappers/code-context';
 import { continuesCodeOnRegularOutput } from './mappers/code-errors';
 import { getRawEditFieldsIssue } from './mappers/raw-edit-fields';
 import { getRabbitMqPublisherIssue, rabbitMqPublisherType } from './mappers/rabbitmq';
@@ -115,9 +115,10 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow, adapters: reado
     const params = node.parameters ?? {};
     const codeIssue = getLegacyNodeReferenceIssue(node);
     if (codeIssue) report(node.name, codeIssue);
-    const code = params.jsCode ?? params.functionCode;
-    if (typeof code === 'string' && /\$\(\s*(['"])(?:\\.|(?!\1)[^\\\r\n])*\1\s*\)\s*\.itemMatching\s*\(/.test(code)) {
-      report(node.name, 'Code itemMatching requires linked-item lookup, which is unsupported');
+    const itemMatchingIssue = getCodeItemMatchingIssue(node);
+    if (itemMatchingIssue) report(node.name, itemMatchingIssue);
+    else if (usesCodeItemMatching(node) && workflow.pollingLoops?.some(loop => loop.nodes.includes(node.name))) {
+      report(node.name, 'Code itemMatching is unsupported inside a polling loop');
     }
     if (node.type === waitNodeType) {
       const issue = getWaitIntervalIssue(node);

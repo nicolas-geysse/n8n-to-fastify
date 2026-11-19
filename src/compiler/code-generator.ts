@@ -5,7 +5,7 @@ import { mapCommunityNode, selectCommunityAdapters, type CommunityAdapter } from
 import { emitMultiReturnPollingLoop, emitPollingLoop } from './polling-code';
 import { getDisabledNodeMode } from './disabled-node';
 import { isPositionMerge } from './mappers/position-merge';
-import { collectLegacyNodePorts, isCodeNode, usesLegacyNodeReferences } from './mappers/code-context';
+import { collectLegacyNodePorts, isCodeNode, usesCodeItemMatching, usesLegacyNodeReferences } from './mappers/code-context';
 import { isRawEditFields, usesRawLegacyNodeReferences } from './mappers/raw-edit-fields';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
 import { s3NodeType } from './mappers/s3';
@@ -69,6 +69,8 @@ export class CodeGenerator {
       ? `const legacyNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map(node => node.name))});\n`
       : '';
     const nodesByName = new Map(wf.nodes.map(node => [node.name, node]));
+    const batchLookup = wf.nodes.some(node => !node.disabled && usesCodeItemMatching(node))
+      ? 'getItemMatchingBatches' : 'getNodeOutputBatches';
     const rabbitMqImport = wf.nodes.some((node) => node.type === rabbitMqPublisherType)
       ? `import { publishRabbitMq } from '${runtimePrefix}/rabbitmq';\n`
       : '';
@@ -217,7 +219,7 @@ ${retryImport}const DateTime = {
         const inputBatches = incoming.flatMap(conn => {
           const region = loopsByMember.get(conn.sourceNode);
           if (!region || !('routes' in region)) {
-            return [`ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`];
+            return [`ctx.${batchLookup}(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`];
           }
           if (emittedRegions.has(region.entry)) return [];
           emittedRegions.add(region.entry);

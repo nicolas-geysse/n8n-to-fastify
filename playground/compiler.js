@@ -1054,6 +1054,15 @@
   }
 
   // src/compiler/mappers/code-context.ts
+  function usesCodeItemMatching(node) {
+    const code = node.parameters?.jsCode;
+    return node.type === "n8n-nodes-base.code" && typeof code === "string" && /\.\s*itemMatching\b/.test(code);
+  }
+  function getCodeItemMatchingIssue(node) {
+    if (usesCodeItemMatching(node) && ((node.parameters?.language ?? "javaScript") !== "javaScript" || (node.parameters?.mode ?? "runOnceForAllItems") !== "runOnceForAllItems")) {
+      return "Code itemMatching requires JavaScript and Run Once for All Items";
+    }
+  }
   function isCodeNode(node) {
     return node.type.includes("code") || node.type.includes("function");
   }
@@ -1601,13 +1610,18 @@
     }`;
     }
     static mapCodeNode(ctx) {
-      const issue = getLegacyNodeReferenceIssue(ctx.node);
+      const issue = getLegacyNodeReferenceIssue(ctx.node) ?? getCodeItemMatchingIssue(ctx.node);
       if (issue)
         throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
       const params = ctx.node.parameters || {};
       const rawCode = params.jsCode || params.functionCode || "return $input.all();";
       const prevVar = ctx.previousVariableName || "inputItems";
       const legacyBinding = ctx.legacyNodePorts ? `      const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});
+` : "";
+      const matchingBinding = usesCodeItemMatching(ctx.node) ? `      const $ = (name: string) => ({
+        ...ctx.getNode(name),
+        itemMatching: (index: number) => ctx.getLinkedItem(name, currentItems, index),
+      });
 ` : "";
       const legacyItemsBinding = /\$items\b/.test(rawCode) ? `      const $items = (nodeName?: string, outputIndex = 0, runIndex = -1) => nodeName === undefined
         ? currentItems
@@ -1636,7 +1650,7 @@ ${legacyItemsBinding}      const result = await (async function (this: { helpers
     // [Node: ${ctx.node.name}] Code Execution
     ${ctx.variableName} = await (async () => {
       const currentItems = ${prevVar} || inputItems;
-${legacyBinding}${inputBinding}${itemsBinding}${execution}
+${legacyBinding}${matchingBinding}${inputBinding}${itemsBinding}${execution}
     })();
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
@@ -2244,6 +2258,7 @@ ${steps.join(`,
       const legacyNames = legacyNodes.size > 0 ? `const legacyNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map((node) => node.name))});
 ` : "";
       const nodesByName = new Map(wf.nodes.map((node) => [node.name, node]));
+      const batchLookup = wf.nodes.some((node) => !node.disabled && usesCodeItemMatching(node)) ? "getItemMatchingBatches" : "getNodeOutputBatches";
       const rabbitMqImport = wf.nodes.some((node) => node.type === rabbitMqPublisherType) ? `import { publishRabbitMq } from '${runtimePrefix}/rabbitmq';
 ` : "";
       const s3Import = wf.nodes.some((node) => node.type === s3NodeType) ? `import { downloadS3Files } from '${runtimePrefix}/s3';
@@ -2370,7 +2385,7 @@ ctx.setNodeOutput(${nodeName}, inputItems);`;
           const inputBatches = incoming.flatMap((conn) => {
             const region = loopsByMember.get(conn.sourceNode);
             if (!region || !("routes" in region)) {
-              return [`ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`];
+              return [`ctx.${batchLookup}(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`];
             }
             if (emittedRegions.has(region.entry))
               return [];

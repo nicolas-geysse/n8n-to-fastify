@@ -1,7 +1,7 @@
 import { N8nNode } from '../parser';
 import { ExpressionParser } from '../expression-parser';
 import { isPositionMerge, mapPositionMerge } from './position-merge';
-import { getLegacyNodeReferenceIssue, isCodeNode } from './code-context';
+import { getCodeItemMatchingIssue, getLegacyNodeReferenceIssue, isCodeNode, usesCodeItemMatching } from './code-context';
 import { continuesCodeOnRegularOutput } from './code-errors';
 import { getRawEditFieldsIssue, isRawEditFields, mapRawEditFields } from './raw-edit-fields';
 import { mapRabbitMqPublisher, rabbitMqPublisherType } from './rabbitmq';
@@ -148,7 +148,7 @@ export class NodeMappers {
   }
 
   private static mapCodeNode(ctx: NodeMapperContext): string {
-    const issue = getLegacyNodeReferenceIssue(ctx.node);
+    const issue = getLegacyNodeReferenceIssue(ctx.node) ?? getCodeItemMatchingIssue(ctx.node);
     if (issue) throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
 
     const params = ctx.node.parameters || {};
@@ -157,6 +157,11 @@ export class NodeMappers {
     const legacyBinding = ctx.legacyNodePorts
       ? `      const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});\n`
       : '';
+
+    const matchingBinding = usesCodeItemMatching(ctx.node) ? `      const $ = (name: string) => ({
+        ...ctx.getNode(name),
+        itemMatching: (index: number) => ctx.getLinkedItem(name, currentItems, index),
+      });\n` : '';
 
     const legacyItemsBinding = /\$items\b/.test(rawCode)
       ? `      const $items = (nodeName?: string, outputIndex = 0, runIndex = -1) => nodeName === undefined
@@ -200,7 +205,7 @@ ${legacyItemsBinding}      const result = await (async function (this: { helpers
     // [Node: ${ctx.node.name}] Code Execution
     ${ctx.variableName} = await (async () => {
       const currentItems = ${prevVar} || inputItems;
-${legacyBinding}${inputBinding}${itemsBinding}${execution}
+${legacyBinding}${matchingBinding}${inputBinding}${itemsBinding}${execution}
     })();
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;

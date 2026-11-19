@@ -1,4 +1,5 @@
 import { N8nItem } from './n8n-helper';
+import { ItemMatching } from './item-matching';
 import { WorkflowTrace } from './workflow-trace';
 import type { NodeTraceSink } from './workflow-trace';
 
@@ -38,6 +39,7 @@ export class WorkflowContext {
   private outputPorts = new Map<string, Map<number, N8nItem[]>>();
   private outputBatches = new Map<string, Map<number, N8nItem[][]>>();
   private pollingExitBatches = new Map<string, Map<string, N8nItem[][]>>();
+  private itemMatching?: ItemMatching;
   private batchInputs = new WeakMap<N8nItem[], N8nItem[]>();
   private nodeRuns = new Map<string, Array<Map<number, N8nItem[]>>>();
   private activeBranches = new Map<string, Set<number>>();
@@ -118,6 +120,20 @@ export class WorkflowContext {
     return items === undefined ? [] : [items];
   }
 
+  public getItemMatchingBatches(nodeName: string, outputIndex: number): N8nItem[][] {
+    const matching = this.itemMatching ??= new ItemMatching();
+    return this.getNodeOutputBatches(nodeName, outputIndex).map(batch => {
+      const input = matching.select(nodeName, batch);
+      this.batchInputs.set(input, batch);
+      return input;
+    });
+  }
+
+  public getLinkedItem(nodeName: string, inputBatch: N8nItem[], index: number): N8nItem {
+    if (!this.itemMatching) throw new Error('Cannot resolve a unique linked item');
+    return this.itemMatching.resolve(nodeName, inputBatch, index);
+  }
+
   public getNodeRunItems(nodeName: string, outputIndex: number, runIndex: number): N8nItem[] {
     const runs = this.nodeRuns.get(nodeName);
     if (!runs) throw new Error('Referenced node has not executed');
@@ -146,7 +162,9 @@ export class WorkflowContext {
       await run(input);
       for (const port of this.activeBranches.get(nodeName) ?? []) {
         const output = this.getNodeOutput(nodeName, port);
-        if (output && output !== input && !this.batchInputs.has(output)) this.batchInputs.set(output, input);
+        if (!output) continue;
+        if (output !== input && !this.batchInputs.has(output)) this.batchInputs.set(output, input);
+        this.itemMatching?.record(nodeName, input, output);
       }
     };
     if (batches.length < 2) {
