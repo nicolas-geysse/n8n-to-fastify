@@ -41,3 +41,16 @@ test('named $items lookup selects the latest or requested batch at the requested
   expect(context.getNodeRunItems('Source', 1, 0)).toEqual(batches[0]);
   expect(() => context.getNodeRunItems('Source', 1, 2)).toThrow('Referenced node run does not exist');
 });
+
+test('named $items preserves empty ports at each execution index', async () => {
+  const context = new WorkflowContext();
+  const batches = [[{ json: { port: 0 } }], [{ json: { port: 1 } }], [{ json: { port: 0 } }]];
+  await context.runNodeBatches('Route', batches, async (items) => {
+    context.setNodeOutputs('Route', [[items[0].json.port, items]], items);
+  });
+  expect(context.getNodeRunItems('Route', 1, 0)).toEqual([]);
+  expect(context.getNodeRunItems('Route', 1, 1)).toEqual(batches[1]);
+  expect(context.getNodeRunItems('Route', 1, -1)).toEqual([]);
+  expect(context.getNodeOutputBatches('Route', 1)).toEqual([batches[1]]);
+  expect(() => context.getNodeRunItems('Route', 1, 3)).toThrow('Referenced node run does not exist');
+});
