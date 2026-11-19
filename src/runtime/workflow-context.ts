@@ -80,6 +80,16 @@ export class WorkflowContext {
     return items === undefined ? [] : [items];
   }
 
+  public getNodeRunItems(nodeName: string, outputIndex: number, runIndex: number): N8nItem[] {
+    if (!this.hasExecutedNode(nodeName)) throw new Error('Referenced node has not executed');
+    if (!Number.isInteger(runIndex) || runIndex < -1) throw new Error('Invalid referenced node run index');
+    const batches = this.getNodeOutputBatches(nodeName, outputIndex);
+    if (batches.length === 0 && runIndex <= 0) return [];
+    const items = batches.at(runIndex);
+    if (!items) throw new Error('Referenced node run does not exist');
+    return items;
+  }
+
   public async runNodeBatches(
     nodeName: string,
     batches: N8nItem[][],
