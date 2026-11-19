@@ -1,4 +1,4 @@
-import { n8n, type N8nItem } from './n8n-helper';
+import type { N8nItem } from './n8n-helper';
 
 interface ExtractOptions {
   binaryProperty: string;
@@ -32,8 +32,15 @@ export function extractBase64Items(items: N8nItem[], getOptions: (item: N8nItem)
       throw new Error('Extract From File requires a safe destination key or dot-separated path');
     }
     const value = Buffer.from(file.data, 'base64').toString('base64');
-    if (literal) json[destination] = value;
-    else n8n.setNestedProperty(json, destination, value);
+    let container = json;
+    for (const [index, part] of path.slice(0, -1).entries()) {
+      if (!Object.hasOwn(container, part) || !container[part] || typeof container[part] !== 'object') {
+        const next = path[index + 1];
+        container[part] = /^(0|[1-9]\d*)$/.test(next) && Number(next) < 2 ** 32 - 1 ? [] : {};
+      }
+      container = container[part];
+    }
+    container[path[path.length - 1]] = value;
     output.push({ json, binary, pairedItem: { item: index } });
   }
   return output;
