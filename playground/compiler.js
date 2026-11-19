@@ -488,7 +488,7 @@
     }
   }
 
-  // node_modules/js-tokens/index.js
+  // ../n2f-polling-fork/node_modules/js-tokens/index.js
   var HashbangComment;
   var Identifier;
   var JSXIdentifier;
@@ -1329,6 +1329,36 @@
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
   }
 
+  // src/compiler/mappers/extract-from-file.ts
+  var extractFromFileType = "n8n-nodes-base.extractFromFile";
+  function getExtractFromFileIssue(node) {
+    const version = node.typeVersion ?? 1;
+    if (version !== 1 && version !== 1.1 || node.parameters?.operation !== "binaryToPropery") {
+      return "Extract From File supports Move File to Base64 String on node versions 1 and 1.1";
+    }
+  }
+  function mapExtractFromFile(ctx) {
+    const issue = getExtractFromFileIssue(ctx.node);
+    if (issue)
+      throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
+    const params = ctx.node.parameters ?? {};
+    const parse = (value) => ExpressionParser.parse(value, "source[0]", "source");
+    const binaryProperty = parse(params.binaryPropertyName ?? "data");
+    const destination = parse(params.destinationKey ?? "data");
+    const keepSource = parse(params.options?.keepSource ?? "");
+    return `
+    {
+      const source: N8nItem[] = ${ctx.previousVariableName ?? "inputItems"} || inputItems;
+      ${ctx.variableName} = extractBase64Items(source, item => ({
+        binaryProperty: String(${binaryProperty} ?? ''),
+        destination: String(${destination} ?? ''),
+        keepSource: ${keepSource},
+      }));
+      item = ${ctx.variableName}[0] || { json: {} };
+      ctx.setNodeOutputs(${JSON.stringify(ctx.node.name)}, [[0, ${ctx.variableName}]], ${ctx.variableName});
+    }`;
+  }
+
   // src/runtime/wait-interval.ts
   var unitMilliseconds = {
     seconds: 1000,
@@ -1485,6 +1515,9 @@
       }
       if (type === convertToFileType) {
         return mapConvertToFile(ctx);
+      }
+      if (type === extractFromFileType) {
+        return mapExtractFromFile(ctx);
       }
       if (type === compressionNodeType) {
         return mapCompression(ctx);
@@ -2219,6 +2252,8 @@ ${steps.join(`,
 ` : "";
       const jsonFileImport = wf.nodes.some((node) => node.type === convertToFileType) ? `import { convertItemsToJsonFile } from '${runtimePrefix}/convert-to-json';
 ` : "";
+      const extractFileImport = wf.nodes.some((node) => node.type === extractFromFileType) ? `import { extractBase64Items } from '${runtimePrefix}/extract-from-file';
+` : "";
       const httpRequestImport = wf.nodes.some((node) => node.type.includes("httpRequest") && (usesMultipartBody(node.parameters) || usesJsonHeaders(node.parameters) || usesFileResponse(node.parameters))) ? `import { createRequestForm, parseRequestHeaders, readFileResponse } from '${runtimePrefix}/http-request';
 ` : "";
       const waitImport = wf.nodes.some((node) => node.type === waitNodeType) ? `import { waitForInterval } from '${runtimePrefix}/wait-interval';
@@ -2235,7 +2270,7 @@ ${steps.join(`,
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 ${communityImports}import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
 ${httpStatusImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
-${httpTimeoutImport}${jsonBodyImport}${legacyNames}
+${httpTimeoutImport}${jsonBodyImport}${extractFileImport}${legacyNames}
 ${retryImport}const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),
