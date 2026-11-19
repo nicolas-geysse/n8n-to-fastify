@@ -8,11 +8,11 @@ test('compiled HTTP retries settle and replay the entire input batch', async () 
   const originalFetch = globalThis.fetch;
   try {
     const input = path.join(dir, 'request.json');
-    const compile = async (retryOnFail: boolean, service: string) => {
+    const compile = async (retryOnFail: boolean, service: string, onError?: string) => {
       writeFileSync(input, JSON.stringify({
         nodes: [{
           name: 'Request', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2,
-          retryOnFail, maxTries: 2, waitBetweenTries: 1,
+          retryOnFail, maxTries: 2, waitBetweenTries: 1, onError,
           parameters: { url: '={{ $json.url }}', method: 'POST' },
         }],
       }));
@@ -69,6 +69,36 @@ test('compiled HTTP retries settle and replay the entire input batch', async () 
     const disabled = await withoutRetry([inputItems[1]]);
     expect(disabled.items).toEqual([{ json: { error: 'fixture response error' } }]);
     expect(calls).toEqual(['response']);
+
+    const continueWithRetry = await compile(true, path.join(dir, 'continue'), 'continueRegularOutput');
+    const rejected = { error: { message: 'HTTP Request failed with status 503', status: 503 } };
+    const attempts = new Map<string, number>();
+    let failedItem = 'second';
+    let failuresLeft = 2;
+    globalThis.fetch = (async url => {
+      const item = String(url).split('/').at(-1)!;
+      attempts.set(item, (attempts.get(item) ?? 0) + 1);
+      return item === failedItem && failuresLeft-- > 0
+        ? Response.json({}, { status: 503 })
+        : Response.json({ item });
+    }) as typeof fetch;
+
+    const laterFailure = await continueWithRetry(inputItems);
+    expect(laterFailure.items).toEqual([
+      { json: { item: 'first' }, pairedItem: { item: 0 } },
+      { json: rejected, pairedItem: { item: 1 } },
+    ]);
+    expect([...attempts.values()]).toEqual([1, 1]);
+
+    attempts.clear();
+    failedItem = 'first';
+    failuresLeft = 2;
+    const exhaustedBatch = await continueWithRetry(inputItems);
+    expect(exhaustedBatch.items).toEqual([
+      { json: rejected, pairedItem: { item: 0 } },
+      { json: { item: 'second' }, pairedItem: { item: 1 } },
+    ]);
+    expect([...attempts.values()]).toEqual([2, 2]);
   } finally {
     globalThis.fetch = originalFetch;
     rmSync(dir, { recursive: true, force: true });

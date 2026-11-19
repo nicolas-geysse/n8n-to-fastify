@@ -11,7 +11,7 @@ import { compressionNodeType } from './mappers/compression';
 import { convertToFileType } from './mappers/convert-to-file';
 import { stopAndErrorType } from './mappers/stop-and-error';
 import { waitNodeType } from './mappers/wait-interval';
-import { usesFileResponse, usesJsonHeaders, usesMultipartBody, usesHttpLegacyNodeReferences } from './mappers/http-request';
+import { continuesHttpOnRegularOutput, usesFileResponse, usesJsonHeaders, usesMultipartBody, usesHttpLegacyNodeReferences } from './mappers/http-request';
 import { rabbitMqTriggerType } from './rabbitmq-trigger';
 import { usesNodeRetry } from './mappers/node-retry';
 
@@ -30,6 +30,9 @@ export class CodeGenerator {
     const functionName = `workflow_${this.sanitizeIdentifier(wf.fileName)}`;
     const depth = (wf.relativePath.match(/\//g) || []).length;
     const runtimePrefix = '../'.repeat(depth + 1) + 'runtime';
+    const httpContinuationImport = wf.nodes.some(node => !node.disabled && continuesHttpOnRegularOutput(node))
+      ? `import { fetchForRegularOutput, settleHttpItems } from '${runtimePrefix}/http-regular-output';\n`
+      : '';
     const positionMergeImport = wf.nodes.some(isPositionMerge)
       ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';\n`
       : '';
@@ -208,7 +211,7 @@ ${nodeCode.trim()}
 
     const keys = Array.from(new Set([wf.id, wf.name, wf.fileName])).filter(Boolean);
 
-    return `${imports}
+    return `${httpContinuationImport}${imports}
 export async function ${functionName}(
   inputItems: N8nItem[] = [{ json: {} }],
   parentCtx?: WorkflowContext,

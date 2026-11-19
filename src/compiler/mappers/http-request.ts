@@ -1,6 +1,10 @@
 import type { N8nNode } from '../core-parser';
 import { ExpressionParser } from '../expression-parser';
 
+export function continuesHttpOnRegularOutput(node: N8nNode): boolean {
+  return node.type === 'n8n-nodes-base.httpRequest' && node.onError === 'continueRegularOutput';
+}
+
 export function usesHttpLegacyNodeReferences(node: N8nNode): boolean {
   return node.type === 'n8n-nodes-base.httpRequest' && /\$node\b/.test(JSON.stringify(node.parameters ?? {}));
 }

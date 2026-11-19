@@ -867,6 +867,9 @@
   }
 
   // src/compiler/mappers/http-request.ts
+  function continuesHttpOnRegularOutput(node) {
+    return node.type === "n8n-nodes-base.httpRequest" && node.onError === "continueRegularOutput";
+  }
   function usesHttpLegacyNodeReferences(node) {
     return node.type === "n8n-nodes-base.httpRequest" && /\$node\b/.test(JSON.stringify(node.parameters ?? {}));
   }
@@ -1323,7 +1326,10 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       })(batch[0]);
       return readFileResponse(res, targetUrl, currentItem, outputProperty, index, includeResponseMetadata);`;
       }
-      const collectItems = usesNodeRetry(ctx.node) ? "settleRetryRequests" : "Promise.all";
+      const continues = continuesHttpOnRegularOutput(ctx.node);
+      const defaultCollection = usesNodeRetry(ctx.node) ? "settleRetryRequests" : "Promise.all";
+      const collectItems = continues ? "settleHttpItems" : defaultCollection;
+      const fetchMethod = continues ? "fetchForRegularOutput" : "fetchWithStatus";
       const request = `${collectItems}((${prevVar} || inputItems).map(async (${callbackParameters}) => {
       const item = currentItem;
       ${legacyBinding("index")}
@@ -1331,7 +1337,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       const responseTimeout = createResponseTimeout(${timeout});
       ${headersSnippet}
       const reqBody = ${bodySnippet};
-      const res = await fetchWithStatus(targetUrl, Boolean(${neverError}), {
+      const res = await ${fetchMethod}(targetUrl, Boolean(${neverError}), {
         method: ${JSON.stringify(method)},
         headers: reqHeaders,
         ...(reqBody !== undefined ? { body: reqBody } : {}),
@@ -1556,6 +1562,8 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       const functionName = `workflow_${this.sanitizeIdentifier(wf.fileName)}`;
       const depth = (wf.relativePath.match(/\//g) || []).length;
       const runtimePrefix = "../".repeat(depth + 1) + "runtime";
+      const httpContinuationImport = wf.nodes.some((node) => !node.disabled && continuesHttpOnRegularOutput(node)) ? `import { fetchForRegularOutput, settleHttpItems } from '${runtimePrefix}/http-regular-output';
+` : "";
       const positionMergeImport = wf.nodes.some(isPositionMerge) ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';
 ` : "";
       const legacyNodes = new Set(wf.nodes.filter((node) => usesLegacyNodeReferences(node) || usesRawLegacyNodeReferences(node) || usesHttpLegacyNodeReferences(node)));
@@ -1689,7 +1697,7 @@ ${nodeCode.trim()}
       const lastNodeName = wf.orderedNodes.filter((node) => disabledModes.get(node) !== "skip" && (node.type !== stopAndErrorType || node.disabled)).at(-1)?.name;
       const returnItemsExpr = lastNodeName ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])` : `inputItems`;
       const keys = Array.from(new Set([wf.id, wf.name, wf.fileName])).filter(Boolean);
-      return `${imports}
+      return `${httpContinuationImport}${imports}
 export async function ${functionName}(
   inputItems: N8nItem[] = [{ json: {} }],
   parentCtx?: WorkflowContext,

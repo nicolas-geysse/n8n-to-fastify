@@ -11,7 +11,7 @@ import { convertToFileType, mapConvertToFile } from './convert-to-file';
 import { mapWaitInterval, waitNodeType } from './wait-interval';
 import { mapStopAndError, stopAndErrorType } from './stop-and-error';
 import { usesNodeRetry, withNodeRetry } from './node-retry';
-import { generateMultipartBody, getMultipartIssue, usesFileResponse, usesJsonHeaders, usesMultipartBody } from './http-request';
+import { continuesHttpOnRegularOutput, generateMultipartBody, getMultipartIssue, usesFileResponse, usesJsonHeaders, usesMultipartBody } from './http-request';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -517,7 +517,10 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       return readFileResponse(res, targetUrl, currentItem, outputProperty, index, includeResponseMetadata);`;
     }
 
-    const collectItems = usesNodeRetry(ctx.node) ? 'settleRetryRequests' : 'Promise.all';
+    const continues = continuesHttpOnRegularOutput(ctx.node);
+    const defaultCollection = usesNodeRetry(ctx.node) ? 'settleRetryRequests' : 'Promise.all';
+    const collectItems = continues ? 'settleHttpItems' : defaultCollection;
+    const fetchMethod = continues ? 'fetchForRegularOutput' : 'fetchWithStatus';
     const request = `${collectItems}((${prevVar} || inputItems).map(async (${callbackParameters}) => {
       const item = currentItem;
       ${legacyBinding('index')}
@@ -525,7 +528,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       const responseTimeout = createResponseTimeout(${timeout});
       ${headersSnippet}
       const reqBody = ${bodySnippet};
-      const res = await fetchWithStatus(targetUrl, Boolean(${neverError}), {
+      const res = await ${fetchMethod}(targetUrl, Boolean(${neverError}), {
         method: ${JSON.stringify(method)},
         headers: reqHeaders,
         ...(reqBody !== undefined ? { body: reqBody } : {}),
