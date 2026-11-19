@@ -57,6 +57,37 @@ test('Filter 2.2 keeps and discards individual items in input order', async () =
   });
 });
 
+test.each([
+  ['true', ['text-true', 'one', 'fallback']],
+  ['false', ['text-false', 'zero', 'missing']],
+  ['equals', ['text-false', 'zero']],
+] as const)('Filter 2.2 applies loose boolean conversion for %s per item', async (operation, kept) => {
+  const conditions = {
+    options: { version: 2, typeValidation: 'loose' },
+    conditions: [{
+      leftValue: '={{ $json.flag }}',
+      rightValue: 'FALSE',
+      operator: { type: 'boolean', operation },
+    }],
+  };
+  const input = [
+    { id: 'text-true', flag: 'TRUE' },
+    { id: 'text-false', flag: 'false' },
+    { id: 'one', flag: 1 },
+    { id: 'zero', flag: '0' },
+    { id: 'fallback', flag: 'other' },
+    { id: 'missing', flag: null },
+  ];
+  await withGeneratedWorkflow('filter', 2.2, { conditions }, async run => {
+    const { context } = await run(input.map(json => ({ json })));
+    const keptIds: readonly string[] = kept;
+    expect(ids(context.getNode('Output 0').all())).toEqual(keptIds);
+    expect(ids(context.getNode('Output 1').all())).toEqual(
+      input.filter(({ id }) => !keptIds.includes(id)).map(({ id }) => id),
+    );
+  });
+});
+
 test('IF 2.2 routes each item to its true or false output and skips empty outputs', async () => {
   const conditions = { conditions: [
     { leftValue: '={{ $json.ready }}', operator: { type: 'boolean', operation: 'true' } },
