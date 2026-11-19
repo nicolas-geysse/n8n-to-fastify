@@ -46,17 +46,6 @@ test('compiled workflows skip detached disabled nodes and pass through connected
   }
 });
 
-test('strict mode flags disabled nodes connected to secondary inputs', () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'n2f-disabled-port-'));
-  try {
-    const { result } = compileDisabledFixture(dir, 1);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr.toString()).toContain('disabled node configuration is unsupported');
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
 test('a disabled root with an output does not activate its branch', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'n2f-disabled-root-'));
   try {
@@ -85,6 +74,18 @@ test('a disabled root with an output does not activate its branch', async () => 
     expect(resultRun.context.hasExecutedNode('Live')).toBe(true);
     expect(resultRun.context.hasExecutedNode('Detached')).toBe(false);
     expect(resultRun.context.hasExecutedNode('Inactive')).toBe(false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+
+test('strict mode flags disabled nodes connected to secondary inputs', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'n2f-disabled-port-'));
+  try {
+    const { result } = compileDisabledFixture(dir, 1);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr.toString()).toContain('disabled node configuration is unsupported');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
