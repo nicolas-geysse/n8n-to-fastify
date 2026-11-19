@@ -61,11 +61,13 @@ export class NodeMappers {
     }
 
     if (type.includes('filter')) {
-      return this.mapFilterNode(ctx);
+      return ctx.node.typeVersion >= 2
+        ? this.mapConditionOutputs(ctx, 'Filter')
+        : this.mapFilterNode(ctx);
     }
 
     if (type.includes('if')) {
-      return this.mapIfNode(ctx);
+      return this.mapConditionOutputs(ctx, 'Conditional Branch (IF)');
     }
 
     if (type.includes('switch')) {
@@ -344,12 +346,12 @@ ${legacyBinding}${execution}
     }`;
   }
 
-  private static mapIfNode(ctx: NodeMapperContext): string {
+  private static mapConditionOutputs(ctx: NodeMapperContext, label: string): string {
     const prevVar = ctx.previousVariableName || 'inputItems';
     const conditionExpr = this.parseConditions(ctx.node.parameters?.conditions);
 
     return `
-    // [Node: ${ctx.node.name}] Conditional Branch (IF)
+    // [Node: ${ctx.node.name}] ${label}
     ${ctx.variableName} = ${prevVar} || inputItems;
     {
       const firstInputItem: N8nItem | undefined = ${ctx.variableName}[0];

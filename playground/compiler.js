@@ -309,7 +309,7 @@
       const schedule = pollingLoops.length ? projectPollingSchedule(nodes, connections, pollingLoops) : { nodes, connections };
       const entryGroups = new Map(pollingLoops.map((loop) => [loop.entry, loop.nodes]));
       const nodeByName = new Map(nodes.map((node) => [node.name, node]));
-      const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections).flatMap((node) => entryGroups.get(node.name)?.map((name2) => nodeByName.get(name2)) ?? [node]);
+      const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections).flatMap((node) => entryGroups.get(node.name)?.map((name) => nodeByName.get(name)) ?? [node]);
       return {
         id,
         name,
@@ -920,10 +920,10 @@
         return this.mapSubworkflowNode(ctx);
       }
       if (type.includes("filter")) {
-        return this.mapFilterNode(ctx);
+        return ctx.node.typeVersion >= 2 ? this.mapConditionOutputs(ctx, "Filter") : this.mapFilterNode(ctx);
       }
       if (type.includes("if")) {
-        return this.mapIfNode(ctx);
+        return this.mapConditionOutputs(ctx, "Conditional Branch (IF)");
       }
       if (type.includes("switch")) {
         return this.mapSwitchNode(ctx);
@@ -1153,11 +1153,11 @@ ${legacyBinding}${execution}
       ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName}, activeIndex);
     }`;
     }
-    static mapIfNode(ctx) {
+    static mapConditionOutputs(ctx, label) {
       const prevVar = ctx.previousVariableName || "inputItems";
       const conditionExpr = this.parseConditions(ctx.node.parameters?.conditions);
       return `
-    // [Node: ${ctx.node.name}] Conditional Branch (IF)
+    // [Node: ${ctx.node.name}] ${label}
     ${ctx.variableName} = ${prevVar} || inputItems;
     {
       const firstInputItem: N8nItem | undefined = ${ctx.variableName}[0];
@@ -1473,8 +1473,8 @@ ${legacyBinding}${execution}
       }
     }
     let hasIncoming = false;
-    for (const outputs2 of Object.values(workflow.connections)) {
-      for (const [type, ports] of Object.entries(outputs2)) {
+    for (const outputs of Object.values(workflow.connections)) {
+      for (const [type, ports] of Object.entries(outputs)) {
         for (const targets of ports) {
           for (const target of targets ?? []) {
             if (target?.node !== node.name)

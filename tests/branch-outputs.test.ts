@@ -6,7 +6,7 @@ import type { N8nItem } from '../src/runtime/n8n-helper';
 import type { CompiledWorkflowFn } from '../src/runtime/workflow-registry';
 
 async function withGeneratedWorkflow(
-  type: 'if' | 'switch',
+  type: 'filter' | 'if' | 'switch',
   typeVersion: number,
   parameters: Record<string, unknown>,
   check: (run: CompiledWorkflowFn) => Promise<void>,
@@ -37,6 +37,25 @@ async function withGeneratedWorkflow(
 }
 
 const ids = (items: N8nItem[] | undefined) => items?.map(item => item.json.id);
+
+test('Filter 2.2 keeps and discards individual items in input order', async () => {
+  const conditions = { conditions: [
+    { leftValue: '={{ $json.text }}', operator: { type: 'string', operation: 'notEmpty', singleValue: true } },
+  ] };
+  await withGeneratedWorkflow('filter', 2.2, { conditions }, async run => {
+    const first = { json: { id: 'first', text: 'hello' } };
+    const second = { json: { id: 'second', text: '' } };
+    const third = { json: { id: 'third', text: 'world' } };
+    const fourth = { json: { id: 'fourth', text: '' } };
+    const { context } = await run([first, second, third, fourth]);
+    expect(ids(context.getNode('Output 0').all())).toEqual(['first', 'third']);
+    expect(ids(context.getNode('Output 1').all())).toEqual(['second', 'fourth']);
+
+    const rejected = await run([second, fourth]);
+    expect(rejected.context.hasExecutedNode('Output 0')).toBe(false);
+    expect(ids(rejected.context.getNode('Output 1').all())).toEqual(['second', 'fourth']);
+  });
+});
 
 test('IF 2.2 routes each item to its true or false output and skips empty outputs', async () => {
   const conditions = { conditions: [
