@@ -26,6 +26,10 @@ test('compiled Edit Fields converts declared numeric assignments and handles inv
       { json: { id: 'invalid', ignoreErrors: true } }]);
     expect(result.items.map(item => item.json.body.fileId)).toEqual([42, null, null, 'invalid']);
     await expect(workflow_number([{ json: { id: 'invalid' } }])).rejects.toThrow('Edit Fields expected a number');
+    const object = { toString: 'metadata' };
+    const ignored = await workflow_number([{ json: { id: object, ignoreErrors: true } }]);
+    expect(ignored.items[0].json.body.fileId).toEqual(object);
+    await expect(workflow_number([{ json: { id: object } }])).rejects.toThrow('Edit Fields expected a number');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
