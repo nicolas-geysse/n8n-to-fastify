@@ -204,9 +204,9 @@ ${legacyBinding}${execution}
     const prevVar = ctx.previousVariableName || 'inputItems';
     const version = ctx.node.typeVersion ?? 3.4;
     const options = params.options ?? {};
-    const include = ExpressionParser.parse(params.include ?? 'all');
+    const include = ExpressionParser.parse(params.include ?? 'all', 'source[0]', 'source');
     const includeOtherFields = version >= 3.3
-      ? ExpressionParser.parse(params.includeOtherFields ?? false)
+      ? ExpressionParser.parse(params.includeOtherFields ?? false, 'source[0]', 'source')
       : String(options.keepOnlySet !== true);
     let includeBinary: string;
     if (version >= 3.4) {
@@ -247,7 +247,7 @@ ${legacyBinding}${execution}
 
     return `
     // [Node: ${ctx.node.name}] Set / Edit Fields
-    ${ctx.variableName} = (${prevVar} || inputItems).map((currentItem: N8nItem) => {
+    ${ctx.variableName} = (${prevVar} || inputItems).map((currentItem: N8nItem, _index: number, source: N8nItem[]) => {
       const item = currentItem;
       const includeInputFields = (${includeOtherFields}) && (${include}) !== 'none';
       const newJson: Record<string, any> = includeInputFields ? { ...currentItem.json } : {};
