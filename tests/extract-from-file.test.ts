@@ -21,6 +21,7 @@ test('compiled Extract From File moves inline binary to base64 and preserves the
       keep_binary: { options: { keepSource: 'binary' } },
       keep_both: { options: { keepSource: 'both' } },
       fields: { binaryPropertyName: '={{ $json.source }}', destinationKey: '={{ $json.destination }}' },
+      lazy_destination: { destinationKey: '={{ JSON.parse($json.destination).key }}' },
     };
     for (const [name, parameters] of Object.entries(cases)) {
       writeFileSync(path.join(input, `${name}.json`), JSON.stringify(workflow(parameters)));
@@ -70,6 +71,11 @@ test('compiled Extract From File moves inline binary to base64 and preserves the
       .rejects.toThrow('requires inline base64 binary data');
     await expect(fields([{ json: { source: 'data', destination: '__proto__.file' }, binary: { data } }]))
       .rejects.toThrow('safe destination');
+    const lazyDestination = await load('lazy_destination');
+    const lazyResult = await lazyDestination([inputs[1], { json: { destination: '{"key":"base64"}' }, binary }]);
+    expect(lazyResult.items).toEqual([
+      { json: { base64: 'AP+A' }, pairedItem: { item: 1 }, binary: { 'scan.part': sidecar } },
+    ]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

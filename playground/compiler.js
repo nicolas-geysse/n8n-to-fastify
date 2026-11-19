@@ -780,9 +780,9 @@
     {
       const source: N8nItem[] = ${ctx.previousVariableName ?? "inputItems"} || inputItems;
       ${ctx.variableName} = extractBase64Items(source, item => ({
-        binaryProperty: String(${binaryProperty} ?? ''),
-        destination: String(${destination} ?? ''),
         keepSource: ${keepSource},
+        binaryProperty: String(${binaryProperty} ?? ''),
+        get destination() { return String(${destination} ?? ''); },
       }));
       item = ${ctx.variableName}[0] || { json: {} };
       ctx.setNodeOutputs(${JSON.stringify(ctx.node.name)}, [[0, ${ctx.variableName}]], ${ctx.variableName});
