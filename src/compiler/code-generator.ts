@@ -2,7 +2,7 @@ import { N8nNode, ParsedWorkflow } from './parser';
 import { postgresTriggerType } from './postgres-trigger';
 import { NodeMappers } from './mappers';
 import { mapCommunityNode, selectCommunityAdapters, type CommunityAdapter } from './community-adapters';
-import { emitPollingLoop } from './polling-code';
+import { emitMultiReturnPollingLoop, emitPollingLoop } from './polling-code';
 import { getDisabledNodeMode } from './disabled-node';
 import { isPositionMerge } from './mappers/position-merge';
 import { collectLegacyNodePorts, isCodeNode, usesLegacyNodeReferences } from './mappers/code-context';
@@ -142,7 +142,7 @@ ${retryImport}const DateTime = {
     const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n) && disabledModes.get(n) !== 'skip');
     const loops = wf.pollingLoops ?? [];
     const loopsByMember = new Map(loops.flatMap(loop => loop.nodes.map(name => [name, loop] as const)));
-    const terminalNames = new Set(loops.flatMap(loop => loop.terminalExits.map(exit => exit.target)));
+    const terminalNames = new Set(loops.flatMap(loop => 'terminalExits' in loop ? loop.terminalExits.map(exit => exit.target) : []));
     const mapNode = (node: N8nNode, previousVariableName: string) => {
       const varName = nodeVarMap.get(node.name)!;
       if (disabledModes.get(node) === 'passthrough') return `
@@ -185,7 +185,9 @@ ${retryImport}const DateTime = {
       const loop = loopsByMember.get(node.name);
       if (loop) {
         if (node.name === loop.entry) {
-          bodyCode += emitPollingLoop(loop, nodesByName, mapNode, emitNodeBlock);
+          bodyCode += 'routes' in loop
+            ? emitMultiReturnPollingLoop(loop, nodesByName, mapNode, emitNodeBlock)
+            : emitPollingLoop(loop, nodesByName, mapNode, emitNodeBlock);
         }
         return;
       }

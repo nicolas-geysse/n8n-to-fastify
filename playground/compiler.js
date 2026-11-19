@@ -181,7 +181,7 @@
     }
     return result;
   }
-  function findPollingLoops(nodes, connections) {
+  function findPollingLoops(nodes, connections, canvasOrder) {
     const byName = new Map(nodes.map((node) => [node.name, node]));
     const edges = readMainEdges(byName, connections);
     const outgoing = new Map;
@@ -195,9 +195,9 @@
       incoming.get(edge.target).push(edge);
     }
     return cyclicComponents(byName.keys(), outgoing).map((component) => {
-      const loop = planLoop(component, byName, outgoing, incoming);
+      const loop = planLoop(component, byName, outgoing, incoming) ?? (canvasOrder ? planMultiReturnLoop(component, byName, outgoing, incoming) : undefined);
       if (!loop) {
-        throw new Error("[n8n-to-fastify] Cyclic dependency detected. Only single-entry polling loops " + "with a timed Wait and one IF or Switch retry output are supported. Nodes: " + component.slice().sort().map((node) => JSON.stringify(node)).join(", "));
+        throw new Error("[n8n-to-fastify] Cyclic dependency detected. Only single-entry polling loops " + "with a timed Wait and one IF or Switch retry output, or two v1 Switch return paths, are supported. Nodes: " + component.slice().sort().map((node) => JSON.stringify(node)).join(", "));
       }
       return loop;
     });
@@ -214,6 +214,68 @@
       main[0].push({ node: target, type: "main", index: 0 });
     }
     return { nodes: nodes.filter((node) => (entries.get(node.name) ?? node.name) === node.name), connections: projected };
+  }
+  function planMultiReturnLoop(component, nodes, outgoing, incoming) {
+    const members = new Set(component);
+    const definitions = component.map((name) => nodes.get(name));
+    if (definitions.some((node) => !allowedTypes.has(node.type) || node.disabled))
+      return;
+    const switches = definitions.filter((node) => node.type === "n8n-nodes-base.switch");
+    const waits = definitions.filter((node) => node.type === waitType);
+    if (switches.length !== 1 || waits.length !== 1 || switches[0].parameters?.options?.allMatchingOutputs || (waits[0].parameters?.resume ?? "timeInterval") !== "timeInterval")
+      return;
+    const decision = switches[0].name;
+    const entries = component.flatMap((name) => (incoming.get(name) ?? []).filter((edge) => !members.has(edge.source)));
+    if (entries.length !== 1 || entries[0].input !== 0)
+      return;
+    const entry = entries[0].target;
+    const inner = new Map(component.map((name) => [name, (outgoing.get(name) ?? []).filter((edge) => members.has(edge.target))]));
+    if ([...inner.values()].some((edges) => edges.some((edge) => edge.input !== 0)))
+      return;
+    const returns = inner.get(decision);
+    if (returns.length !== 2 || returns[0].output === returns[1].output)
+      return;
+    const visited = new Set([decision]);
+    const walk = (start, end) => {
+      let name = start;
+      while (name !== end) {
+        const edges = inner.get(name);
+        if (visited.has(name) || edges?.length !== 1)
+          return false;
+        visited.add(name);
+        name = edges[0].target;
+      }
+      return true;
+    };
+    if (!walk(entry, decision) || visited.has(waits[0].name) || !returns.every((edge) => edge.target !== entry && walk(edge.target, entry)) || visited.size !== component.length)
+      return;
+    const loopExits = component.flatMap((name) => (outgoing.get(name) ?? []).filter((edge) => !members.has(edge.target)));
+    if (!loopExits.length)
+      return;
+    const region = new Set([entry, ...component]);
+    for (const name of region) {
+      for (const { target } of outgoing.get(name) ?? []) {
+        const node = nodes.get(target);
+        if (!node.disabled && (allowedTypes.has(node.type) || node.type === "n8n-nodes-base.stopAndError") && (incoming.get(target) ?? []).every((edge) => edge.input === 0 && region.has(edge.source)))
+          region.add(target);
+      }
+    }
+    const boundaryPorts = [];
+    const routes = [];
+    for (const name of region) {
+      const edges = outgoing.get(name) ?? [];
+      const ports = [...new Set(edges.filter((edge) => !region.has(edge.target)).map((edge) => edge.output))];
+      if (ports.length)
+        boundaryPorts.push([name, ports]);
+      const local = edges.filter((edge) => region.has(edge.target)).reverse().sort((a, b) => {
+        const [ax, ay] = nodes.get(a.target)?.position ?? [0, 0];
+        const [bx, by] = nodes.get(b.target)?.position ?? [0, 0];
+        return ay - by || ax - bx;
+      });
+      if (local.length)
+        routes.push([name, local.map(({ output, target }) => ({ output, target }))]);
+    }
+    return { entry, nodes: [...region], returnStarts: returns.map((edge) => edge.target), routes, boundaryPorts };
   }
   function planLoop(component, nodes, outgoing, incoming) {
     const members = new Set(component);
@@ -331,11 +393,11 @@
         }
         node.ancestorTriggers = Array.from(ancestorTriggers);
       });
-      const pollingLoops = findPollingLoops(nodes, connections);
+      const useCanvasOrder = json.settings?.executionOrder === "v1";
+      const pollingLoops = findPollingLoops(nodes, connections, useCanvasOrder);
       const schedule = pollingLoops.length ? projectPollingSchedule(nodes, connections, pollingLoops) : { nodes, connections };
       const entryGroups = new Map(pollingLoops.map((loop) => [loop.entry, loop.nodes]));
       const nodeByName = new Map(nodes.map((node) => [node.name, node]));
-      const useCanvasOrder = json.settings?.executionOrder === "v1";
       const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections, useCanvasOrder).flatMap((node) => entryGroups.get(node.name)?.map((name) => nodeByName.get(name)) ?? [node]);
       return {
         id,
@@ -421,7 +483,7 @@
     }
   }
 
-  // ../n2f-review/integration/node_modules/js-tokens/index.js
+  // node_modules/js-tokens/index.js
   var HashbangComment;
   var Identifier;
   var JSXIdentifier;
@@ -2023,6 +2085,23 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
   }
 
   // src/compiler/polling-code.ts
+  function emitMultiReturnPollingLoop(loop, nodes, mapNode, wrapNode) {
+    const { nodes: members, ...plan } = loop;
+    const entry = nodes.get(plan.entry);
+    const initial = entry.incomingConnections.find((connection) => !members.includes(connection.sourceNode));
+    const inputBatches = `ctx.getNodeOutputBatches(${JSON.stringify(initial.sourceNode)}, ${initial.outputIndex})`;
+    const steps = members.map((name) => {
+      const node = nodes.get(name);
+      const code = wrapNode(node, "true", mapNode(node, "pollingItems"));
+      return `    [${JSON.stringify(name)}, async (pollingItems) => {
+${code}    }]`;
+    });
+    return `  await ctx.runMultiReturnPollingLoop(${JSON.stringify(plan)}, ${inputBatches}, [
+${steps.join(`,
+`)}
+  ]);
+`;
+  }
   function emitPollingLoop(loop, nodes, mapNode, wrapNode) {
     const { entry, terminalExits, repeatPort, ...runtimePlan } = loop;
     const entryNode = nodes.get(entry);
@@ -2184,7 +2263,7 @@ workflowItems = ctx.getNode(${JSON.stringify(node.name)}).all();`;
       const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n) && disabledModes.get(n) !== "skip");
       const loops = wf.pollingLoops ?? [];
       const loopsByMember = new Map(loops.flatMap((loop) => loop.nodes.map((name) => [name, loop])));
-      const terminalNames = new Set(loops.flatMap((loop) => loop.terminalExits.map((exit) => exit.target)));
+      const terminalNames = new Set(loops.flatMap((loop) => ("terminalExits" in loop) ? loop.terminalExits.map((exit) => exit.target) : []));
       const mapNode = (node, previousVariableName) => {
         const varName = nodeVarMap.get(node.name);
         if (disabledModes.get(node) === "passthrough")
@@ -2231,7 +2310,7 @@ ctx.setNodeOutput(${nodeName}, inputItems);`;
         const loop = loopsByMember.get(node.name);
         if (loop) {
           if (node.name === loop.entry) {
-            bodyCode += emitPollingLoop(loop, nodesByName, mapNode, emitNodeBlock);
+            bodyCode += "routes" in loop ? emitMultiReturnPollingLoop(loop, nodesByName, mapNode, emitNodeBlock) : emitPollingLoop(loop, nodesByName, mapNode, emitNodeBlock);
           }
           return;
         }

@@ -1,6 +1,6 @@
 import { rabbitMqTriggerType } from './rabbitmq-trigger';
 import { postgresTriggerType } from './postgres-trigger';
-import { findPollingLoops, projectPollingSchedule, type PollingLoop } from './polling-loops';
+import { findPollingLoops, projectPollingSchedule, type PollingLoopPlan } from './polling-loops';
 
 export interface N8nNode {
   id: string;
@@ -42,7 +42,7 @@ export interface ParsedWorkflow {
   orderedNodes: N8nNode[];
   triggers: N8nNode[];
   useCanvasOrder?: boolean;
-  pollingLoops?: PollingLoop[];
+  pollingLoops?: PollingLoopPlan[];
 }
 
 /**
@@ -116,11 +116,11 @@ export class CoreWorkflowParser {
       node.ancestorTriggers = Array.from(ancestorTriggers);
     });
 
-    const pollingLoops = findPollingLoops(nodes, connections);
+    const useCanvasOrder = json.settings?.executionOrder === 'v1';
+    const pollingLoops = findPollingLoops(nodes, connections, useCanvasOrder);
     const schedule = pollingLoops.length ? projectPollingSchedule(nodes, connections, pollingLoops) : { nodes, connections };
     const entryGroups = new Map(pollingLoops.map(loop => [loop.entry, loop.nodes]));
     const nodeByName = new Map(nodes.map(node => [node.name, node]));
-    const useCanvasOrder = json.settings?.executionOrder === 'v1';
     const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections, useCanvasOrder).flatMap(node =>
       entryGroups.get(node.name)?.map(name => nodeByName.get(name)!) ?? [node]
     );
