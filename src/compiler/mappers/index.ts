@@ -166,7 +166,7 @@ export class NodeMappers {
       .replace(/\$input\.item/g, '(currentItems[0] || { json: {} })')
       .replace(/\$json/g, '(currentItems[0]?.json || {})')
       .replace(/\$\(['"](.*?)['"]\)\.first\(\)/g, (_: string, n: string) => `(ctx.getNode(${JSON.stringify(n)})?.first() || { json: {} })`)
-      .replace(/\$\(['"](.*?)['"]\)\.item/g, (_: string, n: string) => `(ctx.getNode(${JSON.stringify(n)})?.item || { json: {} })`)
+      .replace(/\$\(['"](.*?)['"]\)\.item(?![\w$])/g, (_: string, n: string) => `(ctx.getNode(${JSON.stringify(n)})?.item || { json: {} })`)
       .replace(/\$\(['"](.*?)['"]\)\.all\(\)/g, (_: string, n: string) => `(ctx.getNode(${JSON.stringify(n)})?.all() || [])`)
       .replace(/\$now/g, 'DateTime.now()');
 
