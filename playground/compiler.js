@@ -1201,7 +1201,7 @@ ${legacyBinding}${execution}
           return `(item: N8nItem) => (${rule.conditions ? this.parseConditions(rule.conditions) : "false"})`;
         }
         const [condition] = rule.conditions.conditions;
-        const value = ExpressionParser.parse(condition.leftValue, "firstInputItem");
+        const value = condition.leftValue === null ? "null" : ExpressionParser.parse(condition.leftValue, "firstInputItem");
         return `(item: N8nItem) => {
         const value = ${value};
         if (value != null && typeof value !== 'boolean') {
