@@ -9,7 +9,8 @@ interface ExtractOptions {
 export function extractBase64Items(items: N8nItem[], getOptions: (item: N8nItem) => ExtractOptions): N8nItem[] {
   const output: N8nItem[] = [];
   for (const [index, item] of items.entries()) {
-    const { binaryProperty, destination, keepSource } = getOptions(item);
+    const options = getOptions(item);
+    const { binaryProperty, keepSource } = options;
     if (!item.binary || !Object.hasOwn(item.binary, binaryProperty) || !item.binary[binaryProperty]) continue;
     const file = item.binary[binaryProperty];
     if (file.id || typeof file.data !== 'string') {
@@ -22,6 +23,8 @@ export function extractBase64Items(items: N8nItem[], getOptions: (item: N8nItem)
     const binary = preserveBinary ? item.binary : structuredClone(item.binary);
     if (!preserveBinary) delete binary[binaryProperty];
 
+    // n8n resolves the destination only for items with a readable file.
+    const { destination } = options;
     const literal = Object.hasOwn(json, destination);
     const path = literal ? [destination] : destination.split('.');
     if (path.some(part => ['__proto__', 'constructor', 'prototype'].includes(part)) ||
