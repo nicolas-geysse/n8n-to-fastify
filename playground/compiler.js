@@ -181,7 +181,7 @@
     }
     return result;
   }
-  function findPollingLoops(nodes, connections, canvasOrder) {
+  function findPollingLoops(nodes, connections, canvasOrder = false) {
     const byName = new Map(nodes.map((node) => [node.name, node]));
     const edges = readMainEdges(byName, connections);
     const outgoing = new Map;
@@ -260,13 +260,18 @@
           region.add(target);
       }
     }
-    const boundaryPorts = [];
+    const boundaryRoutes = [];
     const routes = [];
     for (const name of region) {
       const edges = outgoing.get(name) ?? [];
-      const ports = [...new Set(edges.filter((edge) => !region.has(edge.target)).map((edge) => edge.output))];
-      if (ports.length)
-        boundaryPorts.push([name, ports]);
+      const external = edges.filter((edge) => !region.has(edge.target));
+      if (external.some(({ target }) => {
+        const node = nodes.get(target);
+        return node.type === "n8n-nodes-base.stopAndError" && !node.disabled;
+      }))
+        return;
+      if (external.length)
+        boundaryRoutes.push([name, external.map(({ output, target }) => ({ output, target }))]);
       const local = edges.filter((edge) => region.has(edge.target)).reverse().sort((a, b) => {
         const [ax, ay] = nodes.get(a.target)?.position ?? [0, 0];
         const [bx, by] = nodes.get(b.target)?.position ?? [0, 0];
@@ -275,7 +280,7 @@
       if (local.length)
         routes.push([name, local.map(({ output, target }) => ({ output, target }))]);
     }
-    return { entry, nodes: [...region], returnStarts: returns.map((edge) => edge.target), routes, boundaryPorts };
+    return { entry, nodes: [...region], routes, boundaryRoutes };
   }
   function planLoop(component, nodes, outgoing, incoming) {
     const members = new Set(component);
@@ -2326,8 +2331,18 @@ ctx.setNodeOutput(${nodeName}, inputItems);`;
         const prevExpr = runPerIncomingBatch ? "incomingItems" : "inputItems";
         let nodeCode = mapNode(node, prevExpr);
         if (runPerIncomingBatch) {
-          const batches = incoming.map((conn) => `ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`);
-          nodeCode = `await ctx.runNodeBatches(${JSON.stringify(node.name)}, [${batches.join(", ")}].flat(), async (incomingItems) => {
+          const emittedRegions = new Set;
+          const inputBatches = incoming.flatMap((conn) => {
+            const region = loopsByMember.get(conn.sourceNode);
+            if (!region || !("routes" in region)) {
+              return [`ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`];
+            }
+            if (emittedRegions.has(region.entry))
+              return [];
+            emittedRegions.add(region.entry);
+            return [`ctx.getPollingExitBatches(${JSON.stringify(region.entry)}, ${JSON.stringify(node.name)})`];
+          });
+          nodeCode = `await ctx.runNodeBatches(${JSON.stringify(node.name)}, [${inputBatches.join(", ")}].flat(), async (incomingItems) => {
 ${nodeCode.trim()}
 });`;
         }

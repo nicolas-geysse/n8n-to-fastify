@@ -17,9 +17,8 @@ interface PollingRun {
 
 export interface PollingDispatchPlan {
   entry: string;
-  returnStarts: string[];
   routes: Array<[string, { output: number; target: string }[]]>;
-  boundaryPorts: Array<[string, number[]]>;
+  boundaryRoutes: PollingDispatchPlan['routes'];
 }
 
 function pollingAttemptLimit(): number {
@@ -38,6 +37,7 @@ export class WorkflowContext {
   private nodeOutputs = new Map<string, N8nItem[]>();
   private outputPorts = new Map<string, Map<number, N8nItem[]>>();
   private outputBatches = new Map<string, Map<number, N8nItem[][]>>();
+  private pollingExitBatches = new Map<string, Map<string, N8nItem[][]>>();
   private batchInputs = new WeakMap<N8nItem[], N8nItem[]>();
   private nodeRuns = new Map<string, Array<Map<number, N8nItem[]>>>();
   private activeBranches = new Map<string, Set<number>>();
@@ -218,6 +218,8 @@ export class WorkflowContext {
     initialBatches: N8nItem[][],
     steps: Array<[string, (items: N8nItem[]) => Promise<void>]>,
   ): Promise<void> {
+    const byTarget = new Map<string, N8nItem[][]>();
+    this.pollingExitBatches.set(plan.entry, byTarget);
     for (const [name] of steps) {
       this.clearNodeOutput(name);
       this.executedNodes.delete(name);
@@ -226,8 +228,7 @@ export class WorkflowContext {
     const limit = pollingAttemptLimit();
     const handlers = new Map(steps);
     const routes = new Map(plan.routes);
-    const boundaryPorts = new Map(plan.boundaryPorts);
-    const returnStarts = new Set(plan.returnStarts);
+    const boundaryRoutes = new Map(plan.boundaryRoutes);
     const exits = new Map<string, Map<number, N8nItem[][]>>();
 
     for (const initial of initialBatches) {
@@ -236,16 +237,21 @@ export class WorkflowContext {
       const pending = [{ name: plan.entry, items: initial }];
       while (pending.length) {
         const { name, items } = pending.pop()!;
-        if ((name === plan.entry || returnStarts.has(name)) && attempts >= limit) {
-          throw new Error(`Polling loop exceeded its limit of ${limit} attempts`);
+        if (name === plan.entry) {
+          if (attempts >= limit) throw new Error(`Polling loop exceeded its limit of ${limit} attempts`);
+          attempts++;
         }
-        if (name === plan.entry) attempts++;
         this.clearNodeOutput(name);
         await this.runNodeBatches(name, [items], handlers.get(name)!);
 
-        for (const port of boundaryPorts.get(name) ?? []) {
+        const recordedPorts = new Set<number>();
+        for (const { output: port, target } of boundaryRoutes.get(name) ?? []) {
           const output = this.getNodeOutput(name, port);
           if (!output?.length) continue;
+          if (!byTarget.has(target)) byTarget.set(target, []);
+          byTarget.get(target)!.push(output);
+          if (recordedPorts.has(port)) continue;
+          recordedPorts.add(port);
           if (!exits.has(name)) exits.set(name, new Map());
           const batches = exits.get(name)!;
           if (!batches.has(port)) batches.set(port, []);
@@ -263,6 +269,10 @@ export class WorkflowContext {
     for (const [name, batches] of exits) {
       this.setBatchedOutputs(name, batches, [...batches.values()].flat());
     }
+  }
+
+  public getPollingExitBatches(entry: string, target: string): N8nItem[][] {
+    return this.pollingExitBatches.get(entry)?.get(target) ?? [];
   }
 
   private clearNodeOutput(nodeName: string): void {

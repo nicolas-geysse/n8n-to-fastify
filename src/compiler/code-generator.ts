@@ -209,11 +209,18 @@ ${retryImport}const DateTime = {
       const prevExpr = runPerIncomingBatch ? 'incomingItems' : 'inputItems';
       let nodeCode = mapNode(node, prevExpr);
       if (runPerIncomingBatch) {
-        const batches = incoming.map(
-          conn => `ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`
-        );
+        const emittedRegions = new Set<string>();
+        const inputBatches = incoming.flatMap(conn => {
+          const region = loopsByMember.get(conn.sourceNode);
+          if (!region || !('routes' in region)) {
+            return [`ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`];
+          }
+          if (emittedRegions.has(region.entry)) return [];
+          emittedRegions.add(region.entry);
+          return [`ctx.getPollingExitBatches(${JSON.stringify(region.entry)}, ${JSON.stringify(node.name)})`];
+        });
         // Keep the mapper body's original indentation, including multiline literals.
-        nodeCode = `await ctx.runNodeBatches(${JSON.stringify(node.name)}, [${batches.join(', ')}].flat(), async (incomingItems) => {
+        nodeCode = `await ctx.runNodeBatches(${JSON.stringify(node.name)}, [${inputBatches.join(', ')}].flat(), async (incomingItems) => {
 ${nodeCode.trim()}
 });`;
       }

@@ -125,7 +125,7 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 >
 > Compiled polling loops support a single-entry cycle with one timed `Wait` and one `IF` or `Switch` retry port; completed batches continue after the cycle and direct `Stop and Error` exits fail immediately. Set `N8N_TO_FASTIFY_POLL_MAX_ATTEMPTS` at runtime to override the default limit of `100` attempts per batch.
 >
-> Workflows exported with `executionOrder: v1` can also use two `Switch` return paths to the same entry, with one timed `Wait`. Batches follow canvas order through the loop and its exclusively connected single-input exits. Shared downstream nodes resume after the loop. Both return paths share the attempt limit for each incoming batch.
+> Workflows exported with `executionOrder: v1` can also use two `Switch` return paths to the same entry, with one timed `Wait`. Batches follow canvas order through the loop and its exclusively connected single-input exits. Shared downstream nodes receive completed batches in order after the loop. A `Stop and Error` exit must belong exclusively to the loop so it can fail immediately. Both return paths share the limit on executions of the entry node for each incoming batch.
 
 ---
 
