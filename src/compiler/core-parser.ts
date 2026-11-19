@@ -114,7 +114,8 @@ export class CoreWorkflowParser {
     const schedule = pollingLoops.length ? projectPollingSchedule(nodes, connections, pollingLoops) : { nodes, connections };
     const entryGroups = new Map(pollingLoops.map(loop => [loop.entry, loop.nodes]));
     const nodeByName = new Map(nodes.map(node => [node.name, node]));
-    const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections).flatMap(node =>
+    const useCanvasOrder = json.settings?.executionOrder === 'v1';
+    const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections, useCanvasOrder).flatMap(node =>
       entryGroups.get(node.name)?.map(name => nodeByName.get(name)!) ?? [node]
     );
 
@@ -131,7 +132,7 @@ export class CoreWorkflowParser {
     };
   }
 
-  private static topologicalSort(nodes: N8nNode[], connections: Record<string, any>): N8nNode[] {
+  private static topologicalSort(nodes: N8nNode[], connections: Record<string, any>, useCanvasOrder: boolean): N8nNode[] {
     const nodeMap = new Map<string, N8nNode>();
     const adjList = new Map<string, string[]>();
 
@@ -170,6 +171,14 @@ export class CoreWorkflowParser {
       pathStack.push(nodeName);
 
       const neighbors = adjList.get(nodeName) || [];
+      if (useCanvasOrder) {
+        // Visit lower and rightmost children first because the postorder is reversed below.
+        neighbors.sort((a, b) => {
+          const [ax, ay] = nodeMap.get(a)?.position ?? [0, 0];
+          const [bx, by] = nodeMap.get(b)?.position ?? [0, 0];
+          return by - ay || bx - ax;
+        });
+      }
       for (const neighbor of neighbors) {
         dfs(neighbor, pathStack);
       }

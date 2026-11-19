@@ -309,7 +309,8 @@
       const schedule = pollingLoops.length ? projectPollingSchedule(nodes, connections, pollingLoops) : { nodes, connections };
       const entryGroups = new Map(pollingLoops.map((loop) => [loop.entry, loop.nodes]));
       const nodeByName = new Map(nodes.map((node) => [node.name, node]));
-      const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections).flatMap((node) => entryGroups.get(node.name)?.map((name2) => nodeByName.get(name2)) ?? [node]);
+      const useCanvasOrder = json.settings?.executionOrder === "v1";
+      const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections, useCanvasOrder).flatMap((node) => entryGroups.get(node.name)?.map((name) => nodeByName.get(name)) ?? [node]);
       return {
         id,
         name,
@@ -322,7 +323,7 @@
         pollingLoops
       };
     }
-    static topologicalSort(nodes, connections) {
+    static topologicalSort(nodes, connections, useCanvasOrder) {
       const nodeMap = new Map;
       const adjList = new Map;
       nodes.forEach((node) => {
@@ -355,6 +356,13 @@
         visiting.add(nodeName);
         pathStack.push(nodeName);
         const neighbors = adjList.get(nodeName) || [];
+        if (useCanvasOrder) {
+          neighbors.sort((a, b) => {
+            const [ax, ay] = nodeMap.get(a)?.position ?? [0, 0];
+            const [bx, by] = nodeMap.get(b)?.position ?? [0, 0];
+            return by - ay || bx - ax;
+          });
+        }
         for (const neighbor of neighbors) {
           dfs(neighbor, pathStack);
         }
@@ -1473,8 +1481,8 @@ ${legacyBinding}${execution}
       }
     }
     let hasIncoming = false;
-    for (const outputs2 of Object.values(workflow.connections)) {
-      for (const [type, ports] of Object.entries(outputs2)) {
+    for (const outputs of Object.values(workflow.connections)) {
+      for (const [type, ports] of Object.entries(outputs)) {
         for (const targets of ports) {
           for (const target of targets ?? []) {
             if (target?.node !== node.name)
