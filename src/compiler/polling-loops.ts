@@ -86,7 +86,7 @@ function cyclicComponents(nodes: Iterable<string>, outgoing: Map<string, Edge[]>
   return result;
 }
 
-export function findPollingLoops(nodes: N8nNode[], connections: ParsedWorkflow['connections'], canvasOrder: boolean): PollingLoopPlan[] {
+export function findPollingLoops(nodes: N8nNode[], connections: ParsedWorkflow['connections'], canvasOrder = false): PollingLoopPlan[] {
   const byName = new Map(nodes.map(node => [node.name, node]));
   const edges = readMainEdges(byName, connections);
   const outgoing = new Map<string, Edge[]>();
@@ -176,12 +176,17 @@ function planMultiReturnLoop(
     }
   }
 
-  const boundaryPorts: PollingDispatchPlan['boundaryPorts'] = [];
+  const boundaryRoutes: PollingDispatchPlan['boundaryRoutes'] = [];
   const routes: PollingDispatchPlan['routes'] = [];
   for (const name of region) {
     const edges = outgoing.get(name) ?? [];
-    const ports = [...new Set(edges.filter(edge => !region.has(edge.target)).map(edge => edge.output))];
-    if (ports.length) boundaryPorts.push([name, ports]);
+    const external = edges.filter(edge => !region.has(edge.target));
+    // A terminal stop must run at its branch position. Shared targets are deferred.
+    if (external.some(({ target }) => {
+      const node = nodes.get(target)!;
+      return node.type === 'n8n-nodes-base.stopAndError' && !node.disabled;
+    })) return;
+    if (external.length) boundaryRoutes.push([name, external.map(({ output, target }) => ({ output, target }))]);
     const local = edges.filter(edge => region.has(edge.target)).reverse().sort((a, b) => {
       const [ax, ay] = nodes.get(a.target)?.position ?? [0, 0];
       const [bx, by] = nodes.get(b.target)?.position ?? [0, 0];
@@ -189,7 +194,7 @@ function planMultiReturnLoop(
     });
     if (local.length) routes.push([name, local.map(({ output, target }) => ({ output, target }))]);
   }
-  return { entry, nodes: [...region], returnStarts: returns.map(edge => edge.target), routes, boundaryPorts };
+  return { entry, nodes: [...region], routes, boundaryRoutes };
 }
 
 function planLoop(
