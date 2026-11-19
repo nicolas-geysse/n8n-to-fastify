@@ -4,15 +4,16 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 test.each([
-  { property: undefined, field: 'data', endpoint: '/fixture.bin', fileName: 'fixture.bin' },
-  { property: '={{ $json.field }}', field: 'attachment', endpoint: '/download', fileName: 'attachment.bin' },
-])('compiled HTTP file responses preserve bytes and emit $field', async ({ property, field, endpoint, fileName }) => {
+  { property: undefined, field: 'data', endpoint: '/fixture.bin', fileName: 'fixture.bin', extension: 'bin', mime: 'application/octet-stream' },
+  { property: '={{ $json.field }}', field: 'attachment', endpoint: '/download', fileName: 'attachment.bin', extension: 'bin', mime: 'application/octet-stream' },
+  { property: undefined, field: 'data', endpoint: '/report.custom?download=1', fileName: 'report.custom', extension: 'custom', mime: 'application/x-n2f-fixture-custom' },
+])('compiled HTTP file responses preserve bytes and the filename for $endpoint', async ({ property, field, endpoint, fileName, extension, mime }) => {
   const dir = mkdtempSync(path.join(tmpdir(), 'n2f-http-file-'));
   const bytes = Uint8Array.of(0, 80, 255);
   const receiver = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
-    fetch: () => new Response(bytes, { headers: { 'Content-Type': 'application/octet-stream' } }),
+    fetch: () => new Response(bytes, { headers: { 'Content-Type': mime } }),
   });
 
   try {
@@ -46,8 +47,8 @@ test.each([
       expect(item.binary?.[field]).toMatchObject({
         data: Buffer.from(bytes).toString('base64'),
         fileName,
-        fileExtension: 'bin',
-        mimeType: 'application/octet-stream',
+        fileExtension: extension,
+        mimeType: mime,
       });
       expect(item.json).toEqual(inputs[index].json);
       expect(item.pairedItem).toEqual({ item: index });
