@@ -77,3 +77,55 @@ test('the CLI compiles and runs an explicitly registered community action adapte
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('community adapter ports route ordered batches and reject invalid output shapes', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'n2f-adapter-ports-'));
+  try {
+    const input = path.join(root, 'routing.json');
+    const output = path.join(root, 'service');
+    const manifest = path.join(root, 'adapters.json');
+    const adapter = { type: 'n8n-nodes-example.router', typeVersion: 1, module: './router.mjs' };
+    const names = ['Even', 'Odd', 'Idle'];
+    const writeManifest = (outputCount: unknown) => writeFileSync(manifest, JSON.stringify({
+      schemaVersion: 1, adapters: [{ ...adapter, outputCount }],
+    }));
+    writeFileSync(input, JSON.stringify({
+      nodes: [{ name: 'Router', type: adapter.type, typeVersion: 1 }, ...names.map(name => ({
+        name, type: 'n8n-nodes-base.code', typeVersion: 2, parameters: { jsCode: 'return $input.all();' },
+      }))],
+      connections: { Router: { main: names.map(node => [{ node, type: 'main', index: 0 }]) } },
+    }));
+    writeFileSync(path.join(root, 'router.mjs'), `
+      export default async ({ items }) => {
+        if (items[0]?.json.invalid) return [[], , []];
+        const ports = [[], [], []];
+        items.forEach((item, index) => ports[item.json.value % 2].push({ ...item, pairedItem: { item: index } }));
+        return ports;
+      };
+    `);
+    const compile = () => Bun.spawnSync([
+      process.execPath, path.resolve('bin/cli.ts'), 'compile', input, '--out', output,
+      '--strict', '--adapters', manifest,
+    ]);
+    writeManifest(0);
+    expect(compile().stderr.toString()).toContain('Expected a positive integer outputCount');
+    writeManifest(2);
+    expect(compile().stderr.toString()).toContain('community adapter supports main outputs 0 through 1');
+    expect(existsSync(output)).toBe(false);
+    writeManifest(3);
+    const compiled = compile();
+    expect(compiled.stderr.toString()).toBe('');
+    expect(compiled.exitCode).toBe(0);
+    const { workflow_routing } = await import(path.join(output, 'workflows', 'routing.ts'));
+    const items = [{ json: { value: 2 } }, { json: { value: 1 } }, { json: { value: 4 }, binary: { data: { data: 'AA==' } } }];
+    const { context } = await workflow_routing(items);
+    expect(context.getNode('Even').all()).toEqual([
+      { ...items[0], pairedItem: { item: 0 } }, { ...items[2], pairedItem: { item: 2 } },
+    ]);
+    expect(context.getNode('Odd').all()).toEqual([{ ...items[1], pairedItem: { item: 1 } }]);
+    expect(context.hasExecutedNode('Idle')).toBe(false);
+    await expect(workflow_routing([{ json: { invalid: true } }])).rejects.toThrow('3 arrays of n8n items');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

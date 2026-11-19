@@ -30,7 +30,7 @@ export function readAdapterFiles(filePath: string): AdapterFile[] {
   return input.adapters.map((entry: unknown, index: number) => {
     const label = `adapter ${index + 1}`;
     if (!isObject(entry)) throw new Error(`Expected an object for ${label}.`);
-    const { type, typeVersion, module, parameters = [], handlesRetries = false, dependencies = {} } = entry;
+    const { type, typeVersion, module, parameters = [], handlesRetries = false, outputCount = 1, dependencies = {} } = entry;
     if (typeof type !== 'string' || !/^[\w@][\w@/.-]*\.[a-z][\w-]*$/i.test(type) ||
         type.startsWith('n8n-nodes-base.') || type.startsWith('@n8n/n8n-nodes-langchain.')) {
       throw new Error(`Expected a community node type for ${label}.`);
@@ -48,8 +48,11 @@ export function readAdapterFiles(filePath: string): AdapterFile[] {
         new Set(parameters).size !== parameters.length || typeof handlesRetries !== 'boolean') {
       throw new Error(`Expected unique parameter names and a boolean handlesRetries for ${label}.`);
     }
+    if (typeof outputCount !== 'number' || !Number.isSafeInteger(outputCount) || outputCount < 1) {
+      throw new Error(`Expected a positive integer outputCount for ${label}.`);
+    }
     return {
-      type, typeVersion, parameters, handlesRetries,
+      type, typeVersion, parameters, handlesRetries, outputCount,
       binding: `communityAdapter${index}`, fileName: `adapter-${index}${path.extname(module)}`,
       source: fs.readFileSync(path.resolve(path.dirname(filePath), module), 'utf8'),
       dependencies: validateDependencies(dependencies, label),

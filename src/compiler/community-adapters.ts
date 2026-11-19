@@ -8,6 +8,7 @@ export interface CommunityAdapter {
   fileName: string;
   parameters: string[];
   handlesRetries: boolean;
+  outputCount: number;
 }
 
 export function selectCommunityAdapters<T extends CommunityAdapter>(workflow: ParsedWorkflow, adapters: readonly T[]) {
@@ -30,14 +31,21 @@ export function mapCommunityNode(node: N8nNode, adapter: CommunityAdapter, outpu
     const expression = value === null ? 'null' : ExpressionParser.parse(value, 'adapterItems[0]', 'adapterItems');
     return `[${JSON.stringify(name)}]: ${expression}`;
   });
+  const name = JSON.stringify(node.name);
+  const run = `{ node: ${metadata}, items: adapterItems, parameters }`;
+  const publish = adapter.outputCount > 1
+    ? `const ports = await executeCommunityAdapterPorts(${adapter.binding}, ${run}, ${adapter.outputCount});
+    ${output} = ports.flat();
+    ctx.setNodeOutputs(${name}, ports.entries(), ${output});`
+    : `${output} = await executeCommunityAdapter(${adapter.binding}, ${run});
+    ctx.setNodeOutput(${name}, ${output});`;
   return `{
     const adapterItems: N8nItem[] = ${input} || inputItems;
     const parameters = (index = 0) => {
       const item = adapterItems[index] ?? { json: {} };
       return { ${entries.join(', ')} };
     };
-    ${output} = await executeCommunityAdapter(${adapter.binding}, { node: ${metadata}, items: adapterItems, parameters });
+    ${publish}
     item = ${output}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${output});
   }`;
 }

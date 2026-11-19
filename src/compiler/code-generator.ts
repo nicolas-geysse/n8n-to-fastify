@@ -51,8 +51,11 @@ export class CodeGenerator {
     const positionMergeImport = wf.nodes.some(isPositionMerge)
       ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';\n`
       : '';
+    const adapterExecutors = new Set([...communityNodes.values()].map(adapter =>
+      adapter.outputCount > 1 ? 'executeCommunityAdapterPorts' : 'executeCommunityAdapter'
+    ));
     const communityImports = communityNodes.size > 0 ? [
-      `import { executeCommunityAdapter } from '${runtimePrefix}/community-adapter';`,
+      `import { ${[...adapterExecutors].join(', ')} } from '${runtimePrefix}/community-adapter';`,
       ...[...new Set(communityNodes.values())].map(adapter =>
         `import ${adapter.binding} from ${JSON.stringify(`${runtimePrefix}/adapters/${adapter.fileName}`)};`),
       '',
