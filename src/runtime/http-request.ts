@@ -3,7 +3,9 @@ import type { N8nItem } from './n8n-helper';
 type RequestFormPart = { name: string } & ({ value: string } | { binaryProperty: string });
 
 export function createResponseTimeout(timeout: unknown) {
-  const milliseconds = timeout == null || timeout === 0 ? 300_000 : timeout;
+  // Environment variables evaluate to strings before reaching the timeout helper.
+  const numericTimeout = typeof timeout === 'string' && timeout.trim() ? Number(timeout) : timeout;
+  const milliseconds = numericTimeout == null || numericTimeout === 0 ? 300_000 : numericTimeout;
   if (typeof milliseconds !== 'number' || !Number.isInteger(milliseconds) ||
       milliseconds < 0 || milliseconds > 2_147_483_647) {
     throw new Error('HTTP Request timeout must be a non-negative integer in milliseconds within the timer range');
