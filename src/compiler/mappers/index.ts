@@ -477,12 +477,12 @@ ${legacyBinding}${execution}
     }
 
     const continues = continuesHttpOnRegularOutput(ctx.node);
-    const neverError = ExpressionParser.parse(params.options?.response?.response?.neverError ?? false);
+    const neverError = ExpressionParser.parse(params.options?.response?.response?.neverError ?? false, 'batch[0]', 'batch');
     const collectItems = continues ? 'settleHttpItems' : 'Promise.all';
     const fetchStart = continues ? `fetchForRegularOutput(targetUrl, Boolean(${neverError}), {` : 'fetch(targetUrl, {';
     return `
     // [Node: ${ctx.node.name}] Native HTTP Request (${method})
-    ${ctx.variableName} = await ${collectItems}((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
+    ${ctx.variableName} = await ${collectItems}((${prevVar} || inputItems).map(async (currentItem: N8nItem, _index: number, batch: N8nItem[]) => {
       const item = currentItem;
       const targetUrl = ${urlExpr};
       ${headersSnippet}
