@@ -10,7 +10,7 @@ import { getRabbitMqPublisherIssue, rabbitMqPublisherType } from './mappers/rabb
 import { getS3DownloadIssue, s3NodeType } from './mappers/s3';
 import { compressionNodeType, getCompressionIssue } from './mappers/compression';
 import { convertToFileType, getConvertToFileIssue } from './mappers/convert-to-file';
-import { continuesHttpOnRegularOutput, getMultipartIssue, usesMultipartBody } from './mappers/http-request';
+import { continuesHttpOnErrorOutput, continuesHttpOnRegularOutput, getMultipartIssue, usesMultipartBody } from './mappers/http-request';
 import { getWaitIntervalIssue, waitNodeType } from './mappers/wait-interval';
 import { getStopAndErrorIssue, stopAndErrorType } from './mappers/stop-and-error';
 import { parseRabbitMqTrigger, rabbitMqTriggerType } from './rabbitmq-trigger';
@@ -95,7 +95,7 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow, adapters: reado
       report(node.name, 'legacy continueOnFail is ignored');
     }
     if (node.onError && node.onError !== 'stopWorkflow' &&
-        !continuesCodeOnRegularOutput(node) && !continuesHttpOnRegularOutput(node)) {
+        !continuesCodeOnRegularOutput(node) && !continuesHttpOnRegularOutput(node) && !continuesHttpOnErrorOutput(node)) {
       report(node.name, 'the configured onError behavior is ignored');
     }
     if (node.type === rabbitMqPublisherType) {

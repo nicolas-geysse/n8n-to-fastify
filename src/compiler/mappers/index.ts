@@ -11,7 +11,7 @@ import { convertToFileType, mapConvertToFile } from './convert-to-file';
 import { mapWaitInterval, waitNodeType } from './wait-interval';
 import { mapStopAndError, stopAndErrorType } from './stop-and-error';
 import { usesNodeRetry, withNodeRetry } from './node-retry';
-import { continuesHttpOnRegularOutput, generateMultipartBody, getMultipartIssue, usesFileResponse, usesJsonHeaders, usesMultipartBody } from './http-request';
+import { continuesHttpOnErrorOutput, continuesHttpOnRegularOutput, generateMultipartBody, getMultipartIssue, usesFileResponse, usesJsonHeaders, usesMultipartBody } from './http-request';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -522,7 +522,8 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       return readFileResponse(res, targetUrl, currentItem, outputProperty, index, includeResponseMetadata);`;
     }
 
-    const continues = continuesHttpOnRegularOutput(ctx.node);
+    const errorOutput = continuesHttpOnErrorOutput(ctx.node);
+    const continues = errorOutput || continuesHttpOnRegularOutput(ctx.node);
     const defaultCollection = usesNodeRetry(ctx.node) ? 'settleRetryRequests' : 'Promise.all';
     const collectItems = continues ? 'settleHttpItems' : defaultCollection;
     const fetchMethod = continues ? 'fetchForRegularOutput' : 'fetchWithStatus';
@@ -541,11 +542,15 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       }).finally(responseTimeout.clear);
       ${responseSnippet}
     }))`;
+    const name = JSON.stringify(ctx.node.name);
+    const storeOutput = errorOutput
+      ? `{\n      const outputs = partitionHttpErrorItems(${ctx.variableName}, ${prevVar} || inputItems);\n      ${ctx.variableName} = outputs.flat();\n      ctx.setNodeOutputs(${name}, outputs.entries(), ${ctx.variableName});\n    }`
+      : `ctx.setNodeOutput(${name}, ${ctx.variableName});`;
     return `
     // [Node: ${ctx.node.name}] Native HTTP Request (${method})
     ${ctx.variableName} = await ${withNodeRetry(ctx.node, request)};
-    item = ${ctx.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+    ${storeOutput}
+    item = ${ctx.variableName}[0] || { json: {} };`;
   }
 
   private static mapAggregateNode(ctx: NodeMapperContext): string {

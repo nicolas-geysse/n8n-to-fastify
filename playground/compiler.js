@@ -1354,6 +1354,9 @@
   }
 
   // src/compiler/mappers/http-request.ts
+  function continuesHttpOnErrorOutput(node) {
+    return node.type === "n8n-nodes-base.httpRequest" && node.typeVersion === 4.2 && node.onError === "continueErrorOutput";
+  }
   function continuesHttpOnRegularOutput(node) {
     return node.type === "n8n-nodes-base.httpRequest" && node.onError === "continueRegularOutput";
   }
@@ -1815,7 +1818,8 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       })(batch[0]);
       return readFileResponse(res, targetUrl, currentItem, outputProperty, index, includeResponseMetadata);`;
       }
-      const continues = continuesHttpOnRegularOutput(ctx.node);
+      const errorOutput = continuesHttpOnErrorOutput(ctx.node);
+      const continues = errorOutput || continuesHttpOnRegularOutput(ctx.node);
       const defaultCollection = usesNodeRetry(ctx.node) ? "settleRetryRequests" : "Promise.all";
       const collectItems = continues ? "settleHttpItems" : defaultCollection;
       const fetchMethod = continues ? "fetchForRegularOutput" : "fetchWithStatus";
@@ -1834,11 +1838,17 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       }).finally(responseTimeout.clear);
       ${responseSnippet}
     }))`;
+      const name = JSON.stringify(ctx.node.name);
+      const storeOutput = errorOutput ? `{
+      const outputs = partitionHttpErrorItems(${ctx.variableName}, ${prevVar} || inputItems);
+      ${ctx.variableName} = outputs.flat();
+      ctx.setNodeOutputs(${name}, outputs.entries(), ${ctx.variableName});
+    }` : `ctx.setNodeOutput(${name}, ${ctx.variableName});`;
       return `
     // [Node: ${ctx.node.name}] Native HTTP Request (${method})
     ${ctx.variableName} = await ${withNodeRetry(ctx.node, request)};
-    item = ${ctx.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+    ${storeOutput}
+    item = ${ctx.variableName}[0] || { json: {} };`;
     }
     static mapAggregateNode(ctx) {
       const params = ctx.node.parameters || {};
@@ -2091,7 +2101,9 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       const functionName = `workflow_${this.sanitizeIdentifier(wf.fileName)}`;
       const depth = (wf.relativePath.match(/\//g) || []).length;
       const runtimePrefix = "../".repeat(depth + 1) + "runtime";
-      const httpContinuationImport = wf.nodes.some((node) => !node.disabled && continuesHttpOnRegularOutput(node)) ? `import { fetchForRegularOutput, settleHttpItems } from '${runtimePrefix}/http-regular-output';
+      const httpContinuationImport = wf.nodes.some((node) => !node.disabled && (continuesHttpOnRegularOutput(node) || continuesHttpOnErrorOutput(node))) ? `import { fetchForRegularOutput, settleHttpItems } from '${runtimePrefix}/http-regular-output';
+` : "";
+      const httpErrorOutputImport = wf.nodes.some((node) => !node.disabled && continuesHttpOnErrorOutput(node)) ? `import { partitionHttpErrorItems } from '${runtimePrefix}/http-error-output';
 ` : "";
       const codeHttpRequestImport = wf.nodes.some(isCodeNode) ? `import { codeHttpRequest } from '${runtimePrefix}/code-http-request';
 ` : "";
@@ -2241,7 +2253,7 @@ ${nodeCode.trim()}
       const lastNodeName = wf.orderedNodes.filter((node) => disabledModes.get(node) !== "skip" && (node.type !== stopAndErrorType || node.disabled)).at(-1)?.name;
       const returnItemsExpr = lastNodeName ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])` : `inputItems`;
       const keys = Array.from(new Set([wf.id, wf.name, wf.fileName])).filter(Boolean);
-      return `${httpContinuationImport}${imports}
+      return `${httpContinuationImport}${httpErrorOutputImport}${imports}
 export async function ${functionName}(
   inputItems: N8nItem[] = [{ json: {} }],
   parentCtx?: WorkflowContext,
