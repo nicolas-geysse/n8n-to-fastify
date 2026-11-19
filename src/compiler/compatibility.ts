@@ -5,6 +5,7 @@ import { selectCommunityAdapters, type CommunityAdapter } from './community-adap
 import { getDisabledNodeMode } from './disabled-node';
 import { getPositionMergeIssue, isPositionMerge } from './mappers/position-merge';
 import { getCodeItemMatchingIssue, getLegacyNodeReferenceIssue, usesCodeItemMatching } from './mappers/code-context';
+import { continuesSwitchOnRegularOutput } from './mappers/switch-errors';
 import { continuesCodeOnRegularOutput } from './mappers/code-errors';
 import { getRawEditFieldsIssue } from './mappers/raw-edit-fields';
 import { getRabbitMqPublisherIssue, rabbitMqPublisherType } from './mappers/rabbitmq';
@@ -100,7 +101,7 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow, adapters: reado
       report(node.name, 'legacy continueOnFail is ignored');
     }
     if (node.onError && node.onError !== 'stopWorkflow' &&
-        !continuesCodeOnRegularOutput(node) && !continuesHttpOnRegularOutput(node) && !continuesHttpOnErrorOutput(node)) {
+        !continuesSwitchOnRegularOutput(node) && !continuesCodeOnRegularOutput(node) && !continuesHttpOnRegularOutput(node) && !continuesHttpOnErrorOutput(node)) {
       report(node.name, 'the configured onError behavior is ignored');
     }
     if (node.type === rabbitMqPublisherType) {
