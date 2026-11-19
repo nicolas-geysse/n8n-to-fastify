@@ -4,16 +4,27 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 test.each([
-  { property: undefined, field: 'data', endpoint: '/fixture.bin', fileName: 'fixture.bin', extension: 'bin', mime: 'application/octet-stream' },
-  { property: '={{ $json.field }}', field: 'attachment', endpoint: '/download', fileName: 'attachment.bin', extension: 'bin', mime: 'application/octet-stream' },
-  { property: undefined, field: 'data', endpoint: '/report.custom?download=1', fileName: 'report.custom', extension: 'custom', mime: 'application/x-n2f-fixture-custom' },
-])('compiled HTTP file responses preserve bytes and the filename for $endpoint', async ({ property, field, endpoint, fileName, extension, mime }) => {
+  { property: undefined, field: 'data', endpoint: '/fixture.bin', fileName: 'fixture.bin', fullResponse: false },
+  { property: '={{ $json.field }}', field: 'attachment', endpoint: '/download', fileName: 'attachment.bin', fullResponse: false },
+  { property: 'attachment', field: 'attachment', endpoint: '/download', fileName: 'attachment.bin', fullResponse: true },
+  { property: 'attachment', field: 'attachment', endpoint: '/download', fileName: 'attachment.bin', fullResponse: '={{ $json.withMetadata }}' },
+  { property: 'attachment', field: 'attachment', endpoint: '/report.custom?download=1', fileName: 'report.custom', fullResponse: true, extension: 'custom', mime: 'application/x-n2f-fixture-custom' },
+])('compiled HTTP file responses preserve bytes and emit $field with fullResponse=$fullResponse', async ({ property, field, endpoint, fileName, fullResponse, extension = 'bin', mime = 'application/octet-stream' }) => {
   const dir = mkdtempSync(path.join(tmpdir(), 'n2f-http-file-'));
   const bytes = Uint8Array.of(0, 80, 255);
   const receiver = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
-    fetch: () => new Response(bytes, { headers: { 'Content-Type': mime } }),
+    fetch: () => new Response(bytes, {
+      status: 206,
+      statusText: 'Partial Content',
+      headers: [
+        ['Content-Type', mime],
+        ['X-Fixture', 'metadata'],
+        ['Set-Cookie', 'first=1; Path=/'],
+        ['Set-Cookie', 'second=2; Path=/'],
+      ],
+    }),
   });
 
   try {
@@ -24,7 +35,7 @@ test.each([
         name: 'Download', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2,
         parameters: {
           url: new URL(endpoint, receiver.url).href,
-          options: { response: { response: { responseFormat: 'file', outputPropertyName: property } } },
+          options: { response: { response: { responseFormat: 'file', outputPropertyName: property, fullResponse } } },
         },
       }],
     }));
@@ -37,7 +48,7 @@ test.each([
     const { workflow_download } = await import(path.join(service, 'workflows', 'download.ts'));
     const original = { data: 'AA==', mimeType: 'application/octet-stream' };
     const inputs = [
-      { json: { field: 'attachment' }, binary: { original, [field]: original } },
+      { json: { field: 'attachment', withMetadata: true }, binary: { original, [field]: original } },
       { json: { field: 'different' } },
     ];
     const { items } = await workflow_download(inputs);
@@ -50,7 +61,20 @@ test.each([
         fileExtension: extension,
         mimeType: mime,
       });
-      expect(item.json).toEqual(inputs[index].json);
+      if (fullResponse) {
+        expect(Object.keys(item.json).sort()).toEqual(['headers', 'statusCode', 'statusMessage']);
+        expect(item.json).toMatchObject({
+          statusCode: 206,
+          statusMessage: 'Partial Content',
+          headers: {
+            'content-type': mime,
+            'x-fixture': 'metadata',
+            'set-cookie': ['first=1; Path=/', 'second=2; Path=/'],
+          },
+        });
+      } else {
+        expect(item.json).toEqual(inputs[index].json);
+      }
       expect(item.pairedItem).toEqual({ item: index });
     }
     expect(items[0].binary.original).toEqual(original);
@@ -59,29 +83,6 @@ test.each([
     expect(manifest.dependencies['mime-types']).toBeDefined();
   } finally {
     await receiver.stop(true);
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('strict compile reports the unsupported full response envelope for files', () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'n2f-http-full-file-'));
-  try {
-    const file = path.join(dir, 'download.json');
-    writeFileSync(file, JSON.stringify({
-      nodes: [{
-        name: 'Download', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2,
-        parameters: {
-          options: { response: { response: { responseFormat: 'file', fullResponse: true } } },
-        },
-      }],
-    }));
-
-    const compile = Bun.spawnSync([
-      process.execPath, path.resolve('bin/cli.ts'), 'compile', file, '--out', path.join(dir, 'service'), '--strict',
-    ]);
-    expect(compile.exitCode).toBe(1);
-    expect(compile.stderr.toString()).toContain('HTTP Request file responses do not include response headers and status yet');
-  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
