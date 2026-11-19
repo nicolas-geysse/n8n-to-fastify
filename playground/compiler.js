@@ -98,6 +98,30 @@
     };
   }
 
+  // src/compiler/postgres-trigger.ts
+  var postgresTriggerType = "n8n-nodes-base.postgresTrigger";
+  function getPostgresTriggers(workflow) {
+    return workflow.nodes.filter((node) => node.type === postgresTriggerType && !node.disabled);
+  }
+  function parsePostgresTrigger(node) {
+    if ((node.typeVersion ?? 1) !== 1)
+      return "Postgres Trigger needs typeVersion 1";
+    const { triggerMode, channelName, options = {} } = node.parameters ?? {};
+    if (triggerMode !== "listenTrigger")
+      return "Postgres Trigger supports only Listen to Channel mode";
+    if (typeof channelName !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(channelName)) {
+      return "Postgres Trigger needs a static channel name of up to 63 letters, digits or underscores";
+    }
+    if (!options || typeof options !== "object" || Array.isArray(options) || Object.keys(options).some((key) => key !== "connectionTimeout" && key !== "delayClosingIdleConnection") || (options.delayClosingIdleConnection ?? 0) !== 0) {
+      return "Postgres Trigger supports only the connection timeout option";
+    }
+    const seconds = options.connectionTimeout ?? 30;
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 2147483) {
+      return "Postgres Trigger needs a positive connection timeout in seconds within the timer range";
+    }
+    return { channel: channelName.toLowerCase(), connectionTimeoutMillis: seconds * 1000 };
+  }
+
   // src/compiler/polling-loops.ts
   var waitType = "n8n-nodes-base.wait";
   var allowedTypes = new Set(["if", "switch", "wait", "httpRequest", "code", "set"].map((type) => "n8n-nodes-base." + type));
@@ -288,7 +312,7 @@
       nodes.forEach((node) => {
         node.incomingConnections = incomingMap.get(node.name) || [];
       });
-      const triggers = nodes.filter((node) => node.type === rabbitMqTriggerType || node.type.includes("webhook") || node.type.includes("trigger") || node.type.includes("cron"));
+      const triggers = nodes.filter((node) => node.type === rabbitMqTriggerType || node.type === postgresTriggerType || node.type.includes("webhook") || node.type.includes("trigger") || node.type.includes("cron"));
       const triggerNames = new Set(triggers.map((t) => t.name));
       nodes.forEach((node) => {
         const ancestorTriggers = new Set;
@@ -1668,7 +1692,7 @@ ${retryImport}const DateTime = {
         nodeVarMap.set(node.name, varName);
       });
       const triggers = wf.triggers;
-      const hasRabbitMqTrigger = triggers.some((node) => node.type === rabbitMqTriggerType);
+      const hasEventTrigger = triggers.some((node) => node.type === rabbitMqTriggerType || node.type === postgresTriggerType && !node.disabled);
       const disabledModes = new Map(wf.orderedNodes.map((node) => [node, getDisabledNodeMode(node, wf)]));
       const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n) && disabledModes.get(n) !== "skip");
       const loops = wf.pollingLoops ?? [];
@@ -1693,13 +1717,15 @@ ${retryImport}const DateTime = {
         });
       };
       triggers.forEach((node) => {
+        if (node.type === postgresTriggerType && node.disabled)
+          return;
         const index = wf.orderedNodes.indexOf(node);
         const varName = nodeVarMap.get(node.name);
         declCode += `  let ${varName}: any = inputItems;
 `;
         const nodeName = JSON.stringify(node.name);
         let condition = `entryNode === ${nodeName}`;
-        if (node.type !== rabbitMqTriggerType) {
+        if (node.type !== rabbitMqTriggerType && node.type !== postgresTriggerType) {
           const rawNodePath = (node.parameters?.path || node.name).toLowerCase().trim().replace(/^\/+/, "");
           bodyCode += `  const triggerNode_${index} = item?.json?.__triggerNode;
 `;
@@ -1743,7 +1769,7 @@ ${nodeCode.trim()}
         if (ancestorTriggers.length > 0) {
           const triggerConditions = ancestorTriggers.map((t) => `ctx.hasExecutedNode(${JSON.stringify(t)})`).join(" || ");
           branchCheckStr = `(${triggerConditions}) && ${branchCheckStr}`;
-        } else if (hasRabbitMqTrigger) {
+        } else if (hasEventTrigger) {
           branchCheckStr = `entryNode === undefined && ${branchCheckStr}`;
         }
         bodyCode += this.generateNodeBlock(wf.id, node, branchCheckStr, nodeCode, ancestorTriggers.length > 0 ? "      " : "    ");
@@ -1805,7 +1831,9 @@ import { WorkflowContext } from '../runtime/workflow-context';
         importedFunctions.push(functionName);
       });
       let routeDefinitions = "";
-      const rabbitMqStarts = [];
+      const listenerStarts = [];
+      const needsRabbitMq = workflows.some((workflow) => getRabbitMqTriggers(workflow).length > 0);
+      const needsPostgres = workflows.some((workflow) => getPostgresTriggers(workflow).length > 0);
       const registeredRoutes = new Set;
       workflows.forEach((wf) => {
         const functionName = `workflow_${CodeGenerator.sanitizeIdentifier(wf.fileName)}`;
@@ -1816,7 +1844,19 @@ import { WorkflowContext } from '../runtime/workflow-context';
             throw new Error(`Workflow ${JSON.stringify(wf.name)}, node ${JSON.stringify(node.name)}: ${options}`);
           }
           const logContext = JSON.stringify({ workflowId: wf.id, node: node.name });
-          rabbitMqStarts.push(`      stopConsumers.push(await startRabbitMqConsumer(
+          listenerStarts.push(`      stopListeners.push(await startRabbitMqConsumer(
+        ${JSON.stringify(options)},
+        (items) => ${functionName}(items, undefined, ${JSON.stringify(node.name)}),
+        (message) => fastify.log.error(${logContext}, message),
+      ));`);
+        }
+        for (const node of getPostgresTriggers(wf)) {
+          const options = parsePostgresTrigger(node);
+          if (typeof options === "string") {
+            throw new Error(`Workflow ${JSON.stringify(wf.name)}, node ${JSON.stringify(node.name)}: ${options}`);
+          }
+          const logContext = JSON.stringify({ workflowId: wf.id, node: node.name });
+          listenerStarts.push(`      stopListeners.push(await startPostgresTrigger(
         ${JSON.stringify(options)},
         (items) => ${functionName}(items, undefined, ${JSON.stringify(node.name)}),
         (message) => fastify.log.error(${logContext}, message),
@@ -1881,24 +1921,30 @@ import { WorkflowContext } from '../runtime/workflow-context';
           });
         });
       });
-      if (rabbitMqStarts.length > 0) {
+      if (needsRabbitMq) {
         imports += `import { startRabbitMqConsumer } from '../runtime/rabbitmq';
 `;
+      }
+      if (needsPostgres) {
+        imports += `import { startPostgresTrigger } from '../runtime/postgres-trigger';
+`;
+      }
+      if (listenerStarts.length > 0) {
         routeDefinitions += `
-  const stopConsumers: Array<() => Promise<void>> = [];
-  const closeConsumers = async () => {
-    await Promise.allSettled(stopConsumers.splice(0).map(stop => stop()));
+  const stopListeners: Array<() => Promise<void>> = [];
+  const closeListeners = async () => {
+    await Promise.allSettled(stopListeners.splice(0).map(stop => stop()));
   };
   fastify.addHook('onReady', async () => {
     try {
-${rabbitMqStarts.join(`
+${listenerStarts.join(`
 `)}
     } catch (error) {
-      await closeConsumers();
+      await closeListeners();
       throw error;
     }
   });
-  fastify.addHook('onClose', closeConsumers);
+  fastify.addHook('onClose', closeListeners);
 `;
       }
       return `${imports}
@@ -1912,7 +1958,7 @@ ${routeDefinitions}
 `;
     }
     static generateServerEntry(workflows = []) {
-      const shutdown = workflows.some((workflow) => getRabbitMqTriggers(workflow).length > 0) ? `
+      const shutdown = workflows.some((workflow) => getRabbitMqTriggers(workflow).length > 0 || getPostgresTriggers(workflow).length > 0) ? `
   const close = () => {
     void fastify.close().catch(error => {
       fastify.log.error(error);
@@ -1955,6 +2001,7 @@ try {
     }
     static generateOutputPackageJson(workflows = [], dependencies = {}) {
       const needsRabbitMq = workflows.some((workflow) => getRabbitMqTriggers(workflow).length > 0 || workflow.nodes.some((node) => node.type === rabbitMqPublisherType));
+      const needsPostgres = workflows.some((workflow) => getPostgresTriggers(workflow).length > 0);
       const needsS3 = workflows.some((workflow) => workflow.nodes.some((node) => node.type === s3NodeType));
       const needsCompression = workflows.some((workflow) => workflow.nodes.some((node) => node.type === compressionNodeType));
       const needsMimeTypes = needsS3 || needsCompression || workflows.some((workflow) => workflow.nodes.some((node) => node.type === convertToFileType || node.type === "n8n-nodes-base.httpRequest" && usesFileResponse(node.parameters)));
@@ -1970,6 +2017,7 @@ try {
           "@fastify/cors": "^9.0.1",
           fastify: "^4.28.1",
           ...needsRabbitMq ? { amqplib: "^0.10.9" } : {},
+          ...needsPostgres ? { pg: "8.16.3" } : {},
           ...needsS3 ? { "@aws-sdk/client-s3": "3.808.0" } : {},
           ...needsMimeTypes ? { "mime-types": "^3.0.1" } : {},
           ...needsCompression ? { fflate: "0.8.3" } : {},
