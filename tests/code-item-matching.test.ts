@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -16,7 +16,7 @@ test('Code itemMatching reports a strict diagnostic and keeps a valid fallback i
 try {
   return [{ json: $('Source').itemMatching(0).json }];
 } catch {
-  return [{ json: $('Source').item.json }];
+  /* $('Source').itemMatching(0) */ return [{ json: $('Source').item.json }];
 }`)],
       connections: { Source: { main: [[{ node: 'Read', type: 'main', index: 0 }]] } },
     }));
@@ -30,6 +30,21 @@ try {
     expect(normal.exitCode).toBe(0);
     const { workflow_example } = await import(path.join(output, 'workflows', 'example.ts'));
     expect((await workflow_example()).items).toEqual([{ json: { label: 'input' } }]);
+    const inertSource = JSON.parse(readFileSync(source, 'utf8'));
+    inertSource.nodes[1].parameters.jsCode = `
+const literal = "$('Source').itemMatching(0)";
+/* $('Source').itemMatching(0) */ return [{ json: { literal, label: $('Source').item.json.label } }];
+`;
+    writeFileSync(source, JSON.stringify(inertSource));
+    const inert = Bun.spawnSync([
+      process.execPath, path.resolve('bin/cli.ts'), 'compile', source, '--out', output + '-inert', '--strict',
+    ]);
+    expect(inert.stderr.toString()).toBe('');
+    expect(inert.exitCode).toBe(0);
+    const inertModule = await import(path.join(output + '-inert', 'workflows', 'example.ts'));
+    expect((await inertModule.workflow_example()).items).toEqual([
+      { json: { literal: "$('Source').itemMatching(0)", label: 'input' } },
+    ]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

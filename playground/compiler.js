@@ -991,7 +991,7 @@
       const prevVar = ctx.previousVariableName || "inputItems";
       const legacyBinding = ctx.legacyNodePorts ? `      const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});
 ` : "";
-      const transformedCode = rawCode.replace(/\$input\.all\(\)/g, "currentItems").replace(/\$input\.first\(\)/g, "(currentItems[0] || { json: {} })").replace(/\$input\.item/g, "(currentItems[0] || { json: {} })").replace(/\$json/g, "(currentItems[0]?.json || {})").replace(/\$\(['"](.*?)['"]\)\.first\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.first() || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.item(?![\w$])/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.item || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.all\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.all() || [])`).replace(/\$now/g, "DateTime.now()");
+      const transformedCode = rawCode.replace(/\$input\.all\(\)/g, "currentItems").replace(/\$input\.first\(\)/g, "(currentItems[0] || { json: {} })").replace(/\$input\.item/g, "(currentItems[0] || { json: {} })").replace(/\$json/g, "(currentItems[0]?.json || {})").replace(/\$\(['"](.*?)['"]\)\.first\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.first() || { json: {} })`).replace(/\$\((['"])((?:\\.|(?!\1)[^\\\r\n])*)\1\)\.item(?![\w$])/g, (_, _quote, n) => `(ctx.getNode(${JSON.stringify(n)})?.item || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.all\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.all() || [])`).replace(/\$now/g, "DateTime.now()");
       const runCode = `
       const result = await (async () => {
         ${transformedCode}
