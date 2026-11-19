@@ -1,4 +1,5 @@
 import type { ParsedWorkflow } from './core-parser';
+import { planLanguageModels } from './mappers/linked-llm';
 import { usesNodeRetry } from './mappers/node-retry';
 import { selectCommunityAdapters, type CommunityAdapter } from './community-adapters';
 import { getDisabledNodeMode } from './disabled-node';
@@ -59,16 +60,18 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow, adapters: reado
     issues.push(`Workflow ${workflowLabel}, node ${JSON.stringify(nodeName)}: ${issue}`);
   };
 
+  const { modelSubnodes, issues: modelIssues } = planLanguageModels(workflow);
+  for (const [nodeName, issue] of modelIssues) report(nodeName, issue);
   for (const [source, outputs] of Object.entries(workflow.connections)) {
     for (const type of Object.keys(outputs)) {
-      if (type !== 'main') {
+      if (type !== 'main' && type !== 'ai_languageModel') {
         report(source, `connection type ${JSON.stringify(type)} is ignored`);
       }
     }
   }
 
   for (const node of workflow.nodes) {
-    if (node.type === 'n8n-nodes-base.stickyNote') continue;
+    if (node.type === 'n8n-nodes-base.stickyNote' || modelSubnodes.has(node)) continue;
     if ((node.type === rabbitMqTriggerType || node.type === postgresTriggerType) && node.disabled) continue;
     if (node.disabled) {
       if (!getDisabledNodeMode(node, workflow)) report(node.name, 'disabled node configuration is unsupported');

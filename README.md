@@ -115,6 +115,7 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 | **RabbitMQ Trigger** | Consume a queue and acknowledge on receipt, completion, or successful completion |
 | **S3** | Downloads files into binary items from an S3-compatible endpoint |
 | **Convert to File** | Converts all input items into a single UTF-8 JSON binary file |
+| **Linked Basic LLM Chain** | Uses a primary chat model and an optional fallback from the exported model connections |
 | **Extract From File** | Moves inline binary files to base64 JSON strings, with per-item fields, nested object destinations, and source retention |
 | **Compression** | Decompresses inline ZIP and GZIP binary fields with anti-Zip-Bomb & path-traversal limits |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
@@ -130,6 +131,16 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 > Workflows exported with `executionOrder: v1` can also use two `Switch` return paths to the same entry, with one timed `Wait`. Batches follow canvas order through the loop and its exclusively connected single-input exits. Shared downstream nodes receive completed batches in order after the loop. A `Stop and Error` exit must belong exclusively to the loop so it can fail immediately. Both return paths share the limit on executions of the entry node for each incoming batch.
 
 ---
+
+## Linked Basic LLM Chain
+
+Basic LLM Chain v1.7 supports defined text prompts, text-only system/user/assistant messages, batching, and the primary and fallback model ports. It supports the v1 chat model nodes `lmChatGroq` and `lmChatOllama` with their text generation options.
+
+Set `N8N_LANGUAGE_MODEL_CONNECTIONS` to a JSON object keyed by the original model node IDs when starting the generated service. Each connection has a `baseUrl` and an optional `apiKeyEnv` naming an environment variable with the bearer token. Use the API base URL ending in `/v1` or its equivalent for chat completions, and the server base URL for Ollama. The service reads each model's configuration separately at runtime.
+
+```sh
+export N8N_LANGUAGE_MODEL_CONNECTIONS='{"example-model-node-id":{"baseUrl":"https://models.example.test/v1","apiKeyEnv":"MODEL_TOKEN"}}'
+```
 
 ## 📦 Code Node Dependencies
 

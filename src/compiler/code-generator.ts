@@ -16,6 +16,7 @@ import { stopAndErrorType } from './mappers/stop-and-error';
 import { waitNodeType } from './mappers/wait-interval';
 import { continuesHttpOnErrorOutput, continuesHttpOnRegularOutput, usesFileResponse, usesJsonHeaders, usesMultipartBody, usesHttpLegacyNodeReferences } from './mappers/http-request';
 import { rabbitMqTriggerType } from './rabbitmq-trigger';
+import { mapLinkedLlmChain, planLanguageModels } from './mappers/linked-llm';
 import { usesNodeRetry } from './mappers/node-retry';
 
 export class CodeGenerator {
@@ -34,6 +35,10 @@ export class CodeGenerator {
     const functionName = `workflow_${this.sanitizeIdentifier(wf.fileName)}`;
     const depth = (wf.relativePath.match(/\//g) || []).length;
     const runtimePrefix = '../'.repeat(depth + 1) + 'runtime';
+    const { chains, modelSubnodes } = planLanguageModels(wf);
+    const linkedLlmImport = [...chains.values()].some(Boolean)
+      ? `import { runLinkedLlmChain } from '${runtimePrefix}/linked-llm';\n`
+      : '';
     const httpContinuationImport = wf.nodes.some(node => !node.disabled && (continuesHttpOnRegularOutput(node) || continuesHttpOnErrorOutput(node)))
       ? `import { fetchForRegularOutput, settleHttpItems } from '${runtimePrefix}/http-regular-output';\n`
       : '';
@@ -113,7 +118,7 @@ export class CodeGenerator {
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 ${communityImports}import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
 ${httpStatusImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
-${httpTimeoutImport}${jsonBodyImport}${extractFileImport}${legacyNames}
+${httpTimeoutImport}${jsonBodyImport}${extractFileImport}${linkedLlmImport}${legacyNames}
 ${retryImport}const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),
@@ -145,7 +150,7 @@ ${retryImport}const DateTime = {
       node.type === rabbitMqTriggerType || (node.type === postgresTriggerType && !node.disabled)
     );
     const disabledModes = new Map(wf.orderedNodes.map(node => [node, getDisabledNodeMode(node, wf)]));
-    const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n) && disabledModes.get(n) !== 'skip');
+    const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n) && !modelSubnodes.has(n) && disabledModes.get(n) !== 'skip');
     const loops = wf.pollingLoops ?? [];
     const loopsByMember = new Map(loops.flatMap(loop => loop.nodes.map(name => [name, loop] as const)));
     const terminalNames = new Set(loops.flatMap(loop => 'terminalExits' in loop ? loop.terminalExits.map(exit => exit.target) : []));
@@ -157,6 +162,9 @@ ${retryImport}const DateTime = {
     ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});`;
       const adapter = communityNodes.get(node);
       if (adapter) return mapCommunityNode(node, adapter, varName, previousVariableName);
+      if (chains.has(node)) {
+        return mapLinkedLlmChain({ node, workflowName: wf.name, variableName: varName, previousVariableName }, chains.get(node) ?? null);
+      }
       return NodeMappers.mapNode({
         node,
         workflowName: wf.name,
@@ -244,7 +252,7 @@ ${nodeCode.trim()}
     });
 
     const lastNodeName = wf.orderedNodes
-      .filter(node => disabledModes.get(node) !== 'skip' && (node.type !== stopAndErrorType || node.disabled))
+      .filter(node => !modelSubnodes.has(node) && disabledModes.get(node) !== 'skip' && (node.type !== stopAndErrorType || node.disabled))
       .at(-1)?.name;
     const returnItemsExpr = wf.useCanvasOrder ? 'workflowItems' : lastNodeName
       ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])`
