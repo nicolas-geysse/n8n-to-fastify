@@ -17,14 +17,14 @@ test('compiled HTTP Request rejects non-2xx responses unless Never Error is enab
   });
   try {
     const file = path.join(dir, 'request.json');
-    const run = async (name: string, neverError?: boolean | string) => {
+    const run = async (name: string, neverError?: boolean | string, typeVersion = 4.2) => {
       const service = path.join(dir, name);
       writeFileSync(file, JSON.stringify({
         nodes: [{
-          name: 'Request', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2,
+          name: 'Request', type: 'n8n-nodes-base.httpRequest', typeVersion,
           parameters: {
             url: '={{ $json.url }}',
-            options: { response: { response: { neverError } } },
+            options: typeVersion < 3 ? { ignoreResponseCode: neverError } : { response: { response: { neverError } } },
           },
         }],
       }));
@@ -45,6 +45,13 @@ test('compiled HTTP Request rejects non-2xx responses unless Never Error is enab
     const allowErrors = await run('never-error', true);
     const ignored = await allowErrors([{ json: { url: unavailable } }]);
     expect(ignored.items).toEqual([{ json: { private: 'fixture response body' } }]);
+
+    for (const version of [1, 2]) {
+      const legacy = await run('legacy-' + version, true, version);
+      expect((await legacy([{ json: { url: unavailable } }])).items).toEqual(ignored.items);
+      const legacyDefault = await run('legacy-default-' + version, undefined, version);
+      await expect(legacyDefault([{ json: { url: unavailable } }])).rejects.toThrow('HTTP Request failed with status 503');
+    }
 
     const dynamic = await run('dynamic', '={{ $json.allowErrors }}');
     const dynamicResult = await dynamic([{ json: { url: unavailable, allowErrors: true } }]);

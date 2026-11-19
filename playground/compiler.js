@@ -1239,7 +1239,8 @@ ${legacyBinding}${execution}
       const urlExpr = ExpressionParser.parse(params.url || "");
       const multipart = usesMultipartBody(params);
       const jsonHeaders = usesJsonHeaders(params);
-      const neverError = ExpressionParser.parse(params.options?.response?.response?.neverError ?? false);
+      const legacyIgnoreError = (ctx.node.typeVersion ?? 1) < 3 ? params.options?.ignoreResponseCode : undefined;
+      const neverError = ExpressionParser.parse(params.options?.response?.response?.neverError ?? legacyIgnoreError ?? false);
       let headersObj = "{}";
       if (jsonHeaders) {
         headersObj = `parseRequestHeaders(${ExpressionParser.parse(params.jsonHeaders ?? "{}")})`;
