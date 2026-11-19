@@ -29,9 +29,10 @@ function fixture(fallbackSlot = 1) {
   };
 }
 
-test('compiled model links preserve settings and use the configured fallback for the failed item', async () => {
+test.each([false, true])('compiled model links preserve settings and fallback with Retry On Fail %s', async retry => {
   const dir = mkdtempSync(path.join(tmpdir(), 'n2f-linked-llm-'));
   const requests: Array<{ route: string; auth: string | null; body: any }> = [];
+  let fallbackAttempts = 0;
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
     const route = new URL(request.url).pathname;
     const body = await request.json();
@@ -41,7 +42,10 @@ test('compiled model links preserve settings and use the configured fallback for
       if (prompt === 'switch') return Response.json({ message: 'fake failure' }, { status: 400 });
       return Response.json({ choices: [{ message: { content: ' primary result ' } }] });
     }
-    if (route === '/right/api/chat') return Response.json({ message: { content: ' fallback result ' } });
+    if (route === '/right/api/chat') {
+      if (++fallbackAttempts === 1 && retry) return Response.json({ message: 'fixture error' }, { status: 400 });
+      return Response.json({ message: { content: ' fallback result ' } });
+    }
     return new Response(null, { status: 404 });
   } });
   const saved = Object.fromEntries(['N8N_LANGUAGE_MODEL_CONNECTIONS', 'FIXTURE_LEFT_TOKEN', 'FIXTURE_RIGHT_TOKEN']
@@ -49,7 +53,10 @@ test('compiled model links preserve settings and use the configured fallback for
   try {
     const input = path.join(dir, 'linked.json');
     const output = path.join(dir, 'service');
-    writeFileSync(input, JSON.stringify(fixture()));
+    const workflow = fixture();
+    const chain = workflow.nodes.find(node => node.name === 'Chain')!;
+    Object.assign(chain, { retryOnFail: retry, maxTries: 2, waitBetweenTries: 1 });
+    writeFileSync(input, JSON.stringify(workflow));
     const compile = Bun.spawnSync([
       process.execPath, path.resolve('bin/cli.ts'), 'compile', input, '--out', output, '--strict',
     ]);
@@ -83,9 +90,9 @@ test('compiled model links preserve settings and use the configured fallback for
         body: { model: 'first-model', messages, temperature: 0.4, max_tokens: 64 },
       });
       if (json.prompt === 'stay') {
-        expect(matching).toHaveLength(1);
+        expect(matching).toHaveLength(retry ? 2 : 1);
       } else {
-        expect(matching).toHaveLength(2);
+        expect(matching).toHaveLength(retry ? 4 : 2);
         expect(matching[1]).toEqual({
           route: '/right/api/chat', auth: 'Bearer example-right',
           body: { model: 'backup-model', messages, options: { temperature: 0.2, top_k: 4, top_p: 0.6, num_predict: 32 }, stream: false },
@@ -94,7 +101,7 @@ test('compiled model links preserve settings and use the configured fallback for
     }
     process.env.N8N_LANGUAGE_MODEL_CONNECTIONS = JSON.stringify({ 'primary-model': models['primary-model'] });
     await expect(workflow_linked(inputs)).rejects.toThrow('Missing language model connection');
-    expect(requests).toHaveLength(3);
+    expect(requests).toHaveLength(retry ? 6 : 3);
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key];
@@ -114,7 +121,7 @@ test.each([['duplicate slot'], ['missing models'], ['unsupported retry']])('stri
     const { Start } = workflow.connections;
     const nodes = workflow.nodes.map(node => scenario === 'unsupported retry' && node.name === 'Chain'
       ? { ...node, retryOnFail: true } : node);
-    writeFileSync(input, JSON.stringify({ ...workflow, nodes, connections: scenario === 'missing models' ? { Start } : workflow.connections }));
+    writeFileSync(input, JSON.stringify({ ...workflow, nodes, connections: scenario === 'duplicate slot' ? workflow.connections : { Start } }));
     const compile = Bun.spawnSync([
       process.execPath, path.resolve('bin/cli.ts'), 'compile', input, '--out', output, '--strict',
     ]);

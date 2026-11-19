@@ -66,7 +66,7 @@ export class CodeGenerator {
     const legacyImport = legacyNodes.size > 0
       ? `import { createLegacyNodeReferences } from '${runtimePrefix}/code-context';\n`
       : '';
-    const retryNodes = wf.nodes.filter(node => !node.disabled && usesNodeRetry(node));
+    const retryNodes = wf.nodes.filter(node => !node.disabled && usesNodeRetry(node, Boolean(chains.get(node))));
     const retryImport = retryNodes.length > 0
       ? `import { runWithNodeRetry${retryNodes.some(node => node.type === 'n8n-nodes-base.httpRequest') ? ', settleRetryRequests' : ''} } from '${runtimePrefix}/node-retry';\n`
       : '';

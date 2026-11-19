@@ -60,7 +60,7 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow, adapters: reado
     issues.push(`Workflow ${workflowLabel}, node ${JSON.stringify(nodeName)}: ${issue}`);
   };
 
-  const { modelSubnodes, issues: modelIssues } = planLanguageModels(workflow);
+  const { chains, modelSubnodes, issues: modelIssues } = planLanguageModels(workflow);
   for (const [nodeName, issue] of modelIssues) report(nodeName, issue);
   for (const [source, outputs] of Object.entries(workflow.connections)) {
     for (const type of Object.keys(outputs)) {
@@ -84,8 +84,8 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow, adapters: reado
       else report(node.name, `no community adapter for ${JSON.stringify(node.type)} at typeVersion ${node.typeVersion}`);
       continue;
     }
-    if (!adapter && node.retryOnFail === true && !usesNodeRetry(node)) {
-      report(node.name, 'Retry On Fail is only supported for HTTP Request and S3 Download');
+    if (!adapter && node.retryOnFail === true && !usesNodeRetry(node, Boolean(chains.get(node)))) {
+      report(node.name, 'Retry On Fail is unsupported for this node configuration');
     }
     if (adapter && node.retryOnFail === true && !adapter.handlesRetries) {
       report(node.name, 'the community adapter does not handle Retry On Fail');
