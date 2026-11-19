@@ -2169,15 +2169,20 @@ ${legacyBinding}${matchingBinding}${inputBinding}${itemsBinding}${execution}
       const expression = value === null ? "null" : ExpressionParser.parse(value, "adapterItems[0]", "adapterItems");
       return `[${JSON.stringify(name)}]: ${expression}`;
     });
+    const name = JSON.stringify(node.name);
+    const run = `{ node: ${metadata}, items: adapterItems, parameters }`;
+    const publish = adapter.outputCount > 1 ? `const ports = await executeCommunityAdapterPorts(${adapter.binding}, ${run}, ${adapter.outputCount});
+    ${output} = ports.flat();
+    ctx.setNodeOutputs(${name}, ports.entries(), ${output});` : `${output} = await executeCommunityAdapter(${adapter.binding}, ${run});
+    ctx.setNodeOutput(${name}, ${output});`;
     return `{
     const adapterItems: N8nItem[] = ${input} || inputItems;
     const parameters = (index = 0) => {
       const item = adapterItems[index] ?? { json: {} };
       return { ${entries.join(", ")} };
     };
-    ${output} = await executeCommunityAdapter(${adapter.binding}, { node: ${metadata}, items: adapterItems, parameters });
+    ${publish}
     item = ${output}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${output});
   }`;
   }
 
@@ -2407,8 +2412,9 @@ ${steps.join(`,
 ` : "";
       const positionMergeImport = wf.nodes.some(isPositionMerge) ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';
 ` : "";
+      const adapterExecutors = new Set([...communityNodes.values()].map((adapter) => adapter.outputCount > 1 ? "executeCommunityAdapterPorts" : "executeCommunityAdapter"));
       const communityImports = communityNodes.size > 0 ? [
-        `import { executeCommunityAdapter } from '${runtimePrefix}/community-adapter';`,
+        `import { ${[...adapterExecutors].join(", ")} } from '${runtimePrefix}/community-adapter';`,
         ...[...new Set(communityNodes.values())].map((adapter) => `import ${adapter.binding} from ${JSON.stringify(`${runtimePrefix}/adapters/${adapter.fileName}`)};`),
         ""
       ].join(`

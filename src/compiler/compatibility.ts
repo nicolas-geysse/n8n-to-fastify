@@ -92,10 +92,12 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow, adapters: reado
       report(node.name, 'the community adapter does not handle Retry On Fail');
     }
     const mainOutputs: unknown = workflow.connections[node.name]?.main;
-    if (adapter && Array.isArray(mainOutputs) && mainOutputs.slice(1).some((targets: unknown) =>
+    if (adapter && Array.isArray(mainOutputs) && mainOutputs.slice(adapter.outputCount).some((targets: unknown) =>
       Array.isArray(targets) && targets.length > 0
     )) {
-      report(node.name, 'community adapters support only main output 0');
+      report(node.name, adapter.outputCount === 1
+        ? 'community adapters support only main output 0'
+        : `community adapter supports main outputs 0 through ${adapter.outputCount - 1}`);
     }
     if (node.continueOnFail) {
       report(node.name, 'legacy continueOnFail is ignored');
