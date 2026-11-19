@@ -7,8 +7,12 @@ const prefix = '@n8n/n8n-nodes-langchain.';
 const chainType = prefix + 'chainLlm';
 const connectionType = 'ai_languageModel';
 
-const modelTypes = new Map<string, { transport: ModelTransport; options: Record<string, string> }>([
-  [prefix + 'lmChatGroq', { transport: 'chat-completions', options: { temperature: 'temperature', maxTokensToSample: 'max_tokens' } }],
+const modelTypes = new Map<string, { transport: ModelTransport; options: Record<string, string>; defaults?: Record<string, number> }>([
+  [prefix + 'lmChatGroq', {
+    transport: 'chat-completions',
+    options: { temperature: 'temperature', maxTokensToSample: 'max_tokens' },
+    defaults: { temperature: 0.7 },
+  }],
   [prefix + 'lmChatOllama', { transport: 'ollama', options: { temperature: 'temperature', topK: 'top_k', topP: 'top_p', numPredict: 'num_predict' } }],
 ]);
 const roles = new Map([
@@ -36,13 +40,13 @@ function readModel(node: N8nNode): Model | undefined {
   if (!definition || node.typeVersion !== 1 || node.disabled || !node.id ||
       typeof params.model !== 'string' || !params.model.trim() ||
       typeof options !== 'object' || Array.isArray(options)) return;
-  const entries: Model['options'] = [];
+  const entries = new Map<string, string | number>(Object.entries(definition.defaults ?? {}));
   for (const [key, value] of Object.entries(options)) {
     if (!Object.hasOwn(definition.options, key) ||
         (typeof value !== 'number' && !(typeof value === 'string' && value.startsWith('=')))) return;
-    entries.push([definition.options[key], value]);
+    entries.set(definition.options[key], value);
   }
-  return { id: node.id, transport: definition.transport, model: params.model, options: entries };
+  return { id: node.id, transport: definition.transport, model: params.model, options: [...entries] };
 }
 
 function supportsChain(node: N8nNode): boolean {

@@ -3,7 +3,9 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-function fixture(fallbackSlot = 1) {
+const modelOptions = { temperature: '={{ $json.temperature }}', maxTokensToSample: 64 };
+
+function fixture(fallbackSlot = 1, options?: Record<string, unknown>) {
   const prefix = '@n8n/n8n-nodes-langchain.';
   const target = (node: string, type: string, index = 0) => ({ [type]: [[{ node, type, index }]] });
   return {
@@ -18,7 +20,7 @@ function fixture(fallbackSlot = 1) {
         parameters: { model: 'backup-model', options: { temperature: 0.2, topK: 4, topP: 0.6, numPredict: 32 } } },
       { name: 'Primary', id: 'primary-model', type: prefix + 'lmChatGroq', typeVersion: 1,
         credentials: { modelApi: { id: 'fixture-credential-id', name: 'fixture-credential-name' } },
-        parameters: { model: '={{ $json.model }}', options: { temperature: '={{ $json.temperature }}', maxTokensToSample: 64 } } },
+        parameters: { model: '={{ $json.model }}', options } },
       { name: 'Unused', id: 'unused-model', type: prefix + 'lmChatOllama', typeVersion: 1, parameters: {} },
     ],
     connections: {
@@ -29,7 +31,11 @@ function fixture(fallbackSlot = 1) {
   };
 }
 
-test('compiled model links preserve settings and use the configured fallback for the failed item', async () => {
+test.each([
+  { label: 'explicit options', options: modelOptions, expected: { temperature: 0, max_tokens: 64 } },
+  { label: 'empty options', options: {}, expected: { temperature: 0.7 } },
+  { label: 'omitted options', options: undefined, expected: { temperature: 0.7 } },
+])('compiled model links preserve settings and fallback with $label', async ({ options, expected }) => {
   const dir = mkdtempSync(path.join(tmpdir(), 'n2f-linked-llm-'));
   const requests: Array<{ route: string; auth: string | null; body: any }> = [];
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
@@ -49,7 +55,7 @@ test('compiled model links preserve settings and use the configured fallback for
   try {
     const input = path.join(dir, 'linked.json');
     const output = path.join(dir, 'service');
-    writeFileSync(input, JSON.stringify(fixture()));
+    writeFileSync(input, JSON.stringify(fixture(1, options)));
     const compile = Bun.spawnSync([
       process.execPath, path.resolve('bin/cli.ts'), 'compile', input, '--out', output, '--strict',
     ]);
@@ -66,7 +72,7 @@ test('compiled model links preserve settings and use the configured fallback for
     process.env.FIXTURE_RIGHT_TOKEN = 'example-right';
     process.env.N8N_LANGUAGE_MODEL_CONNECTIONS = JSON.stringify(models);
     const inputs = [
-      { json: { prompt: 'stay', system: 'first', model: 'first-model', temperature: 0.4 } },
+      { json: { prompt: 'stay', system: 'first', model: 'first-model', temperature: 0 } },
       { json: { prompt: 'switch', system: 'second', model: 'different', temperature: 0.9 } },
     ];
     const result = await workflow_linked(inputs);
@@ -80,7 +86,7 @@ test('compiled model links preserve settings and use the configured fallback for
       const messages = [{ role: 'system', content: json.system }, { role: 'user', content: json.prompt }];
       expect(matching[0]).toEqual({
         route: '/left/v1/chat/completions', auth: 'Bearer example-left',
-        body: { model: 'first-model', messages, temperature: 0.4, max_tokens: 64 },
+        body: { model: 'first-model', messages, ...expected },
       });
       if (json.prompt === 'stay') {
         expect(matching).toHaveLength(1);

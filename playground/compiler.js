@@ -1497,7 +1497,11 @@ ${legacyBinding}${execution}
   var chainType = prefix + "chainLlm";
   var connectionType = "ai_languageModel";
   var modelTypes = new Map([
-    [prefix + "lmChatGroq", { transport: "chat-completions", options: { temperature: "temperature", maxTokensToSample: "max_tokens" } }],
+    [prefix + "lmChatGroq", {
+      transport: "chat-completions",
+      options: { temperature: "temperature", maxTokensToSample: "max_tokens" },
+      defaults: { temperature: 0.7 }
+    }],
     [prefix + "lmChatOllama", { transport: "ollama", options: { temperature: "temperature", topK: "top_k", topP: "top_p", numPredict: "num_predict" } }]
   ]);
   var roles = new Map([
@@ -1511,13 +1515,13 @@ ${legacyBinding}${execution}
     const options = params.options ?? {};
     if (!definition || node.typeVersion !== 1 || node.disabled || !node.id || typeof params.model !== "string" || !params.model.trim() || typeof options !== "object" || Array.isArray(options))
       return;
-    const entries = [];
+    const entries = new Map(Object.entries(definition.defaults ?? {}));
     for (const [key, value] of Object.entries(options)) {
       if (!Object.hasOwn(definition.options, key) || typeof value !== "number" && !(typeof value === "string" && value.startsWith("=")))
         return;
-      entries.push([definition.options[key], value]);
+      entries.set(definition.options[key], value);
     }
-    return { id: node.id, transport: definition.transport, model: params.model, options: entries };
+    return { id: node.id, transport: definition.transport, model: params.model, options: [...entries] };
   }
   function supportsChain(node) {
     const params = node.parameters ?? {};
