@@ -165,7 +165,7 @@ export default ({ items, parameters }) => items.map((_, index) => ({
 }));
 ```
 
-Use a trusted, self-contained `.mjs` or `.ts` module. The compiler copies selected modules into the generated service and merges their optional `dependencies` into its package manifest. Each adapter receives the input batch, basic `node` metadata, and a `parameters(index = 0)` function that evaluates the listed top-level parameters using the workflow context. Adapters return an array of n8n items, synchronously or asynchronously. Read credentials from the runtime environment. Set `handlesRetries` to `true` when the module implements retry behavior using `node.retryOnFail`, `node.maxTries`, and `node.waitBetweenTries`.
+Use a trusted, self-contained `.mjs` or `.ts` module. The compiler copies selected modules into the generated service and merges their optional `dependencies` into its package manifest. Each adapter receives the input batch, basic `node` metadata, and a `parameters(index = 0)` function that evaluates the listed top-level parameters using the workflow context. Adapters return an array of n8n items for main output 0, synchronously or asynchronously. Read credentials from the runtime environment. Set `handlesRetries` to `true` when the module implements retry behavior using `node.retryOnFail`, `node.maxTries`, and `node.waitBetweenTries`.
 
 ---
 

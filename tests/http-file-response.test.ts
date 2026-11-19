@@ -8,7 +8,8 @@ test.each([
   { property: '={{ $json.field }}', field: 'attachment', endpoint: '/download', fileName: 'attachment.bin', fullResponse: false },
   { property: 'attachment', field: 'attachment', endpoint: '/download', fileName: 'attachment.bin', fullResponse: true },
   { property: 'attachment', field: 'attachment', endpoint: '/download', fileName: 'attachment.bin', fullResponse: '={{ $json.withMetadata }}' },
-])('compiled HTTP file responses preserve bytes and emit $field with fullResponse=$fullResponse', async ({ property, field, endpoint, fileName, fullResponse }) => {
+  { property: 'attachment', field: 'attachment', endpoint: '/report.custom?download=1', fileName: 'report.custom', fullResponse: true, extension: 'custom', mime: 'application/x-n2f-fixture-custom' },
+])('compiled HTTP file responses preserve bytes and emit $field with fullResponse=$fullResponse', async ({ property, field, endpoint, fileName, fullResponse, extension = 'bin', mime = 'application/octet-stream' }) => {
   const dir = mkdtempSync(path.join(tmpdir(), 'n2f-http-file-'));
   const bytes = Uint8Array.of(0, 80, 255);
   const receiver = Bun.serve({
@@ -18,7 +19,7 @@ test.each([
       status: 206,
       statusText: 'Partial Content',
       headers: [
-        ['Content-Type', 'application/octet-stream'],
+        ['Content-Type', mime],
         ['X-Fixture', 'metadata'],
         ['Set-Cookie', 'first=1; Path=/'],
         ['Set-Cookie', 'second=2; Path=/'],
@@ -57,8 +58,8 @@ test.each([
       expect(item.binary?.[field]).toMatchObject({
         data: Buffer.from(bytes).toString('base64'),
         fileName,
-        fileExtension: 'bin',
-        mimeType: 'application/octet-stream',
+        fileExtension: extension,
+        mimeType: mime,
       });
       if (fullResponse) {
         expect(Object.keys(item.json).sort()).toEqual(['headers', 'statusCode', 'statusMessage']);
@@ -66,7 +67,7 @@ test.each([
           statusCode: 206,
           statusMessage: 'Partial Content',
           headers: {
-            'content-type': 'application/octet-stream',
+            'content-type': mime,
             'x-fixture': 'metadata',
             'set-cookie': ['first=1; Path=/', 'second=2; Path=/'],
           },

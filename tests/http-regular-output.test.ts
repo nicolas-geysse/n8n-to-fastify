@@ -22,9 +22,9 @@ test('HTTP Request continues with paired errors and successful responses in inpu
   });
 
   try {
-    const compile = async (neverError: boolean) => {
+    const compile = async (neverError: boolean | string, name = String(neverError)) => {
       const input = path.join(directory, 'request.json');
-      const output = path.join(directory, String(neverError));
+      const output = path.join(directory, name);
       writeFileSync(input, JSON.stringify({ nodes: [{
         name: 'HTTP Request', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2,
         onError: 'continueRegularOutput',
@@ -65,6 +65,14 @@ test('HTTP Request continues with paired errors and successful responses in inpu
     const ignored = await ignoreStatus([batch[1]]);
     expect(ignored.items).toEqual([
       { json: { message: 'fixture response body' }, pairedItem: { item: 0 } },
+    ]);
+    const fromBatch = await compile('={{ $input.first().json.ignoreStatus && $input.all().length === 2 }}', 'batch');
+    expect((await fromBatch([
+      { json: { ...batch[0].json, ignoreStatus: true } },
+      { json: { ...batch[1].json, ignoreStatus: false } },
+    ])).items).toEqual([
+      { json: { index: 0 }, pairedItem: { item: 0 } },
+      { json: { message: 'fixture response body' }, pairedItem: { item: 1 } },
     ]);
   } finally {
     await receiver.stop(true);

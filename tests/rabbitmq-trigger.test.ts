@@ -106,8 +106,8 @@ test.each([
     fs.writeFileSync(path.join(broker, 'index.cjs'), `
       const events = exports.events = [];
       let deliver;
-      exports.deliver = (content) => deliver({
-        content: Buffer.from(JSON.stringify(content)),
+      exports.deliver = (content, raw = false) => deliver({
+        content: Buffer.from(raw ? content : JSON.stringify(content)),
         fields: { routingKey: 'job' },
         properties: { contentType: 'application/json' },
       });
@@ -147,6 +147,11 @@ test.each([
     expect(client.events).toEqual([
       ...setup, ['bind', 'jobs', 'events', 'job'], ...prefetch, ['consume', 'jobs'],
     ]);
+
+    const malformedStart = client.events.length;
+    client.deliver('invalid JSON', true);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(client.events.slice(malformedStart)).toEqual([...failureBefore, ...failureAfter]);
 
     const failureStart = client.events.length;
     client.deliver({ id: 'failure' });

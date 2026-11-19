@@ -221,9 +221,9 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
     const prevVar = ctx.previousVariableName || 'inputItems';
     const version = ctx.node.typeVersion ?? 3.4;
     const options = params.options ?? {};
-    const include = ExpressionParser.parse(params.include ?? 'all');
+    const include = ExpressionParser.parse(params.include ?? 'all', 'source[0]', 'source');
     const includeOtherFields = version >= 3.3
-      ? ExpressionParser.parse(params.includeOtherFields ?? false)
+      ? ExpressionParser.parse(params.includeOtherFields ?? false, 'source[0]', 'source')
       : String(options.keepOnlySet !== true);
     let includeBinary: string;
     if (version >= 3.4) {
@@ -267,7 +267,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
 
     return `
     // [Node: ${ctx.node.name}] Set / Edit Fields
-    ${ctx.variableName} = (${prevVar} || inputItems).map((currentItem: N8nItem) => {
+    ${ctx.variableName} = (${prevVar} || inputItems).map((currentItem: N8nItem, _index: number, source: N8nItem[]) => {
       const item = currentItem;
       const includeInputFields = (${includeOtherFields}) && (${include}) !== 'none';
       const newJson: Record<string, any> = includeInputFields ? { ...currentItem.json } : {};
@@ -462,10 +462,12 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
     const multipart = usesMultipartBody(params);
     const jsonHeaders = usesJsonHeaders(params);
     const legacyBinding = (index: string): string => ctx.legacyNodePorts
-      ? `const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)}, ${index});`
+      ? `const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)}, ${index}, batch);`
       : '';
 
-    const neverError = ExpressionParser.parse(params.options?.response?.response?.neverError ?? false);
+    // HTTP Request v1/v2 serialized Never Error as Ignore Response Code.
+    const legacyIgnoreError = (ctx.node.typeVersion ?? 1) < 3 ? params.options?.ignoreResponseCode : undefined;
+    const neverError = ExpressionParser.parse(params.options?.response?.response?.neverError ?? legacyIgnoreError ?? false, 'batch[0]', 'batch');
 
     let headersObj = '{}';
     if (jsonHeaders) {
@@ -504,13 +506,11 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       if (!reqHeaders.has('content-type')) reqHeaders.set('content-type', 'application/json');`;
     }
 
-    let callbackParameters = ctx.legacyNodePorts ? 'currentItem: N8nItem, index: number' : 'currentItem: N8nItem';
     let responseSnippet = `const text = await res.text();
       let data: any;
       try { data = JSON.parse(text); } catch { data = { raw: text }; }
       return { json: typeof data === 'object' && data !== null ? data : { data } };`;
     if (usesFileResponse(params)) {
-      callbackParameters = 'currentItem: N8nItem, index: number, batch: N8nItem[]';
       const responseOptions = params.options.response.response;
       const outputProperty = ExpressionParser.parse(responseOptions.outputPropertyName ?? 'data', 'batch[0]', 'batch');
       const fullResponse = ExpressionParser.parse(responseOptions.fullResponse ?? false, 'batch[0]', 'batch');
@@ -525,7 +525,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
     const defaultCollection = usesNodeRetry(ctx.node) ? 'settleRetryRequests' : 'Promise.all';
     const collectItems = continues ? 'settleHttpItems' : defaultCollection;
     const fetchMethod = continues ? 'fetchForRegularOutput' : 'fetchWithStatus';
-    const request = `${collectItems}((${prevVar} || inputItems).map(async (${callbackParameters}) => {
+    const request = `${collectItems}((${prevVar} || inputItems).map(async (currentItem: N8nItem, index: number, batch: N8nItem[]) => {
       const item = currentItem;
       ${legacyBinding('index')}
       const targetUrl = ${urlExpr};

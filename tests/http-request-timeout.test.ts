@@ -5,6 +5,7 @@ import path from 'node:path';
 
 test('compiled HTTP Request times out waiting for headers and can read a slow response body', async () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'n2f-http-timeout-'));
+  const priorTimeout = process.env.N2F_FIXTURE_HTTP_TIMEOUT;
   const receiver = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
@@ -33,7 +34,7 @@ test('compiled HTTP Request times out waiting for headers and can read a slow re
         name: 'Request', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2,
         parameters: {
           url: '={{ $json.url }}',
-          options: { timeout: '={{ $json.timeout }}' },
+          options: { timeout: '={{ $json.timeout ?? $env.N2F_FIXTURE_HTTP_TIMEOUT }}' },
         },
       }],
     }));
@@ -45,9 +46,16 @@ test('compiled HTTP Request times out waiting for headers and can read a slow re
     const delayed = new URL('/slow-headers', receiver.url).href;
     await expect(workflow_request([{ json: { url: delayed, timeout: 20 } }]))
       .rejects.toThrow(/^HTTP Request timed out after 20 ms$/);
+    process.env.N2F_FIXTURE_HTTP_TIMEOUT = '20';
+    await expect(workflow_request([{ json: { url: delayed } }]))
+      .rejects.toThrow(/^HTTP Request timed out after 20 ms$/);
+    await expect(workflow_request([{ json: { url: delayed, timeout: ' ' } }]))
+      .rejects.toThrow('HTTP Request timeout must be a non-negative integer');
     const result = await workflow_request([{ json: { url: String(receiver.url), timeout: 500 } }]);
     expect(result.items).toEqual([{ json: { success: true } }]);
   } finally {
+    if (priorTimeout === undefined) delete process.env.N2F_FIXTURE_HTTP_TIMEOUT;
+    else process.env.N2F_FIXTURE_HTTP_TIMEOUT = priorTimeout;
     await receiver.stop(true);
     rmSync(dir, { recursive: true, force: true });
   }

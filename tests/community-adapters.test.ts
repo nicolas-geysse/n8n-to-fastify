@@ -12,12 +12,16 @@ test('the CLI compiles and runs an explicitly registered community action adapte
     const output = path.join(root, 'service');
     const manifest = path.join(root, 'adapters.json');
     const write = (file: string, data: unknown) => writeFileSync(file, JSON.stringify(data));
-    const type = 'n8n-nodes-example.echo';
-    write(workflow, { nodes: [{
+    const type = 'n8n-nodes-example.mergeAction';
+    const graph = { nodes: [{
+      name: 'Prepare', id: 'prepare', type: 'n8n-nodes-base.code', typeVersion: 2,
+      parameters: { jsCode: 'return $input.all().map(item => ({ json: { amount: item.json.amount + 10 } }));' },
+    }, {
       name: 'Echo', id: 'echo-fixture', type, typeVersion: 1, retryOnFail: true, maxTries: 2,
       parameters: { value: '={{ $json.amount * 2 }}', first: '={{ $input.first().json.amount }}', opaque: 'fixture-omitted' },
       credentials: { example: { id: 'omitted-credential-id' } },
-    }] });
+    }], connections: { Prepare: { main: [[{ node: 'Echo', type: 'main', index: 0 }]] } } };
+    write(workflow, graph);
     const adapter = {
       type, typeVersion: 1, module: './echo fixture.mjs',
       parameters: ['value', 'first'], dependencies: { 'left-pad': '1.3.0' }, handlesRetries: true,
@@ -45,6 +49,17 @@ test('the CLI compiles and runs an explicitly registered community action adapte
     expect(existsSync(output)).toBe(false);
 
     configure(adapter);
+    write(workflow, { ...graph, connections: {
+      ...graph.connections, Echo: { main: [[], [{ node: 'Next', type: 'main', index: 0 }]] },
+    }, nodes: [...graph.nodes, {
+      name: 'Next', id: 'next', type: 'n8n-nodes-base.code', typeVersion: 2,
+      parameters: { jsCode: 'return $input.all();' },
+    }] });
+    const unsupportedOutput = compile('--adapters', manifest);
+    expect(unsupportedOutput.exitCode).toBe(1);
+    expect(unsupportedOutput.stderr.toString()).toContain('community adapters support only main output 0');
+    expect(existsSync(output)).toBe(false);
+    write(workflow, graph);
     const compiled = compile('--adapters', manifest);
     if (compiled.exitCode !== 0) throw new Error(compiled.stderr.toString());
     const workflowPath = path.join(output, 'workflows', 'nested', 'example.ts');
@@ -55,8 +70,8 @@ test('the CLI compiles and runs an explicitly registered community action adapte
     const { workflow_example } = await import(workflowPath);
     const { items } = await workflow_example([{ json: { amount: 2 } }, { json: { amount: 5 } }]);
     expect(items).toEqual([
-      { json: { value: 4, first: 2, node: 'echo-fixture', retry: 2 }, pairedItem: { item: 0 } },
-      { json: { value: 10, first: 2, node: 'echo-fixture', retry: 2 }, pairedItem: { item: 1 } },
+      { json: { value: 24, first: 12, node: 'echo-fixture', retry: 2 }, pairedItem: { item: 0 } },
+      { json: { value: 30, first: 12, node: 'echo-fixture', retry: 2 }, pairedItem: { item: 1 } },
     ]);
   } finally {
     rmSync(root, { recursive: true, force: true });

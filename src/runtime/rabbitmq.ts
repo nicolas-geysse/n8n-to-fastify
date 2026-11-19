@@ -123,6 +123,8 @@ export async function startRabbitMqConsumer(
     if (options.prefetch !== undefined) await channel.prefetch(options.prefetch);
 
     async function handle(message: Delivery) {
+      if (acknowledge === 'immediately') channel.ack(message);
+
       let content: unknown;
       try {
         const body = message.content.toString();
@@ -132,12 +134,12 @@ export async function startRabbitMqConsumer(
           channel.nack(message, false, true);
           report('RabbitMQ workflow failed; message requeued');
         } else {
-          report('RabbitMQ message could not be decoded');
+          // Completion mode also settles messages that fail before the workflow starts.
+          if (acknowledge === 'executionFinishes') channel.ack(message);
+          report('RabbitMQ message could not be decoded; message acknowledged');
         }
         return;
       }
-
-      if (acknowledge === 'immediately') channel.ack(message);
 
       let failed = false;
       try {

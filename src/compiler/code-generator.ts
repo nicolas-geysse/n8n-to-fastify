@@ -180,8 +180,9 @@ ${retryImport}const DateTime = {
 
       let branchCheckStr = 'true';
       const incoming = node.incomingConnections ?? [];
+      // Registered adapters receive connected batches even when their type contains "merge".
       const runPerIncomingBatch = incoming.length > 0 &&
-        (disabledModes.get(node) === 'passthrough' || !node.type.includes('merge'));
+        (disabledModes.get(node) === 'passthrough' || communityNodes.has(node) || !node.type.includes('merge'));
 
       if (incoming.length > 0) {
         const branchChecks = incoming.map(
