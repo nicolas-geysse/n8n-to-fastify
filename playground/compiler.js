@@ -1651,14 +1651,15 @@ ctx.setNodeOutput(${nodeName}, inputItems);`;
           return;
         let branchCheckStr = "true";
         const incoming = node.incomingConnections ?? [];
-        const runPerIncomingBatch = incoming.length > 0 && (communityNodes.has(node) || !node.type.includes("merge"));
+        const runPerIncomingBatch = incoming.length > 0 && !node.type.includes("merge");
         if (incoming.length > 0) {
           const branchChecks = incoming.map((conn) => `ctx.isBranchActive(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`);
           branchCheckStr = `(${branchChecks.join(" || ")})`;
         }
-        const prevExpr = runPerIncomingBatch ? "incomingItems" : "inputItems";
+        const usesConnectedBatches = runPerIncomingBatch || incoming.length > 0 && communityNodes.has(node);
+        const prevExpr = usesConnectedBatches ? "incomingItems" : "inputItems";
         let nodeCode = mapNode(node, prevExpr);
-        if (runPerIncomingBatch) {
+        if (usesConnectedBatches) {
           const batches = incoming.map((conn) => `ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`);
           nodeCode = `await ctx.runNodeBatches(${JSON.stringify(node.name)}, [${batches.join(", ")}].flat(), async (incomingItems) => {
 ${nodeCode.trim()}

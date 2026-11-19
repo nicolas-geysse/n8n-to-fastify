@@ -155,8 +155,7 @@ const DateTime = {
 
       let branchCheckStr = 'true';
       const incoming = node.incomingConnections ?? [];
-      // Registered adapters receive connected batches even when their type contains "merge".
-      const runPerIncomingBatch = incoming.length > 0 && (communityNodes.has(node) || !node.type.includes('merge'));
+      const runPerIncomingBatch = incoming.length > 0 && !node.type.includes('merge');
 
       if (incoming.length > 0) {
         const branchChecks = incoming.map(
@@ -165,9 +164,11 @@ const DateTime = {
         branchCheckStr = `(${branchChecks.join(' || ')})`;
       }
 
-      const prevExpr = runPerIncomingBatch ? 'incomingItems' : 'inputItems';
+      // A registered adapter always receives its connected batch.
+      const usesConnectedBatches = runPerIncomingBatch || (incoming.length > 0 && communityNodes.has(node));
+      const prevExpr = usesConnectedBatches ? 'incomingItems' : 'inputItems';
       let nodeCode = mapNode(node, prevExpr);
-      if (runPerIncomingBatch) {
+      if (usesConnectedBatches) {
         const batches = incoming.map(
           conn => `ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`
         );
