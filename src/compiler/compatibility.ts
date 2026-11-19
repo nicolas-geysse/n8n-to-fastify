@@ -87,6 +87,10 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     const params = node.parameters ?? {};
     const codeIssue = getLegacyNodeReferenceIssue(node);
     if (codeIssue) report(node.name, codeIssue);
+    const code = params.jsCode ?? params.functionCode;
+    if (typeof code === 'string' && /\$\(\s*(['"])(?:\\.|(?!\1)[^\\\r\n])*\1\s*\)\s*\.itemMatching\s*\(/.test(code)) {
+      report(node.name, 'Code itemMatching requires linked-item lookup, which is unsupported');
+    }
     if (node.type === waitNodeType) {
       const issue = getWaitIntervalIssue(node);
       if (issue) report(node.name, issue);
