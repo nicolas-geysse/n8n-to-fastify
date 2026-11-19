@@ -155,7 +155,8 @@ const DateTime = {
 
       let branchCheckStr = 'true';
       const incoming = node.incomingConnections ?? [];
-      const runPerIncomingBatch = incoming.length > 0 && !node.type.includes('merge');
+      // Registered adapters receive connected batches even when their type contains "merge".
+      const runPerIncomingBatch = incoming.length > 0 && (communityNodes.has(node) || !node.type.includes('merge'));
 
       if (incoming.length > 0) {
         const branchChecks = incoming.map(
