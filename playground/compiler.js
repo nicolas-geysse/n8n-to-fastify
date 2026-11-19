@@ -1483,6 +1483,45 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
     }
   }
 
+  // src/compiler/community-adapters.ts
+  function selectCommunityAdapters(workflow, adapters) {
+    const selected = new Map;
+    for (const node of workflow.nodes) {
+      if (node.disabled || workflow.triggers.includes(node))
+        continue;
+      const adapter = adapters.find((entry) => entry.type === node.type && entry.typeVersion === node.typeVersion);
+      if (adapter)
+        selected.set(node, adapter);
+    }
+    return selected;
+  }
+  function mapCommunityNode(node, adapter, output, input) {
+    const metadata = JSON.stringify({
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      typeVersion: node.typeVersion,
+      retryOnFail: node.retryOnFail === true,
+      maxTries: node.maxTries,
+      waitBetweenTries: node.waitBetweenTries
+    });
+    const entries = adapter.parameters.filter((name) => Object.hasOwn(node.parameters ?? {}, name)).map((name) => {
+      const value = node.parameters[name];
+      const expression = value === null ? "null" : ExpressionParser.parse(value, "adapterItems[0]", "adapterItems");
+      return `[${JSON.stringify(name)}]: ${expression}`;
+    });
+    return `{
+    const adapterItems: N8nItem[] = ${input} || inputItems;
+    const parameters = (index = 0) => {
+      const item = adapterItems[index] ?? { json: {} };
+      return { ${entries.join(", ")} };
+    };
+    ${output} = await executeCommunityAdapter(${adapter.binding}, { node: ${metadata}, items: adapterItems, parameters });
+    item = ${output}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${output});
+  }`;
+  }
+
   // src/compiler/polling-code.ts
   function emitPollingLoop(loop, nodes, mapNode, wrapNode) {
     const { entry, terminalExits, repeatPort, ...runtimePlan } = loop;
@@ -1558,7 +1597,8 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
     static sanitizeIdentifier(str) {
       return str.replace(/[^a-zA-Z0-9_]/g, "_").replace(/^[0-9]/, "_$&").replace(/__+/g, "_");
     }
-    static generateWorkflowCode(wf) {
+    static generateWorkflowCode(wf, adapters = []) {
+      const communityNodes = selectCommunityAdapters(wf, adapters);
       const functionName = `workflow_${this.sanitizeIdentifier(wf.fileName)}`;
       const depth = (wf.relativePath.match(/\//g) || []).length;
       const runtimePrefix = "../".repeat(depth + 1) + "runtime";
@@ -1566,6 +1606,12 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
 ` : "";
       const positionMergeImport = wf.nodes.some(isPositionMerge) ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';
 ` : "";
+      const communityImports = communityNodes.size > 0 ? [
+        `import { executeCommunityAdapter } from '${runtimePrefix}/community-adapter';`,
+        ...[...new Set(communityNodes.values())].map((adapter) => `import ${adapter.binding} from ${JSON.stringify(`${runtimePrefix}/adapters/${adapter.fileName}`)};`),
+        ""
+      ].join(`
+`) : "";
       const legacyNodes = new Set(wf.nodes.filter((node) => usesLegacyNodeReferences(node) || usesRawLegacyNodeReferences(node) || usesHttpLegacyNodeReferences(node)));
       const rawFieldsImport = wf.nodes.some(isRawEditFields) ? `import { applyRawEditFields, encodeJsonTemplateValue } from '${runtimePrefix}/raw-edit-fields';
 ` : "";
@@ -1599,7 +1645,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
 ` : "";
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
-import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
+${communityImports}import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
 ${httpStatusImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
 ${httpTimeoutImport}${jsonBodyImport}${legacyNames}
 ${retryImport}const DateTime = {
@@ -1627,10 +1673,15 @@ ${retryImport}const DateTime = {
       const terminalNames = new Set(loops.flatMap((loop) => loop.terminalExits.map((exit) => exit.target)));
       const mapNode = (node, previousVariableName) => {
         const varName = nodeVarMap.get(node.name);
-        return disabledModes.get(node) === "passthrough" ? `
+        if (disabledModes.get(node) === "passthrough")
+          return `
     ${varName} = ${previousVariableName} || [];
     item = ${varName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});` : NodeMappers.mapNode({
+    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});`;
+        const adapter = communityNodes.get(node);
+        if (adapter)
+          return mapCommunityNode(node, adapter, varName, previousVariableName);
+        return NodeMappers.mapNode({
           node,
           workflowName: wf.name,
           variableName: varName,
