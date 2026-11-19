@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -12,13 +12,14 @@ test('compiled HTTP retries settle and replay the entire input batch', async () 
       writeFileSync(input, JSON.stringify({
         nodes: [{
           name: 'Request', type: 'n8n-nodes-base.httpRequest', typeVersion: 4.2,
-          retryOnFail, maxTries: 2, waitBetweenTries: 1,
+          retryOnFail, maxTries: 2, waitBetweenTries: 0,
           parameters: { url: '={{ $json.url }}', method: 'POST' },
         }],
       }));
       expect(Bun.spawnSync([
         process.execPath, path.resolve('bin/cli.ts'), 'compile', input, '--out', service, '--strict',
       ]).exitCode).toBe(0);
+      if (retryOnFail) expect(readFileSync(path.join(service, 'workflows', 'request.ts'), 'utf8')).toContain('})), 2, 0)');
       const { workflow_request } = await import(path.join(service, 'workflows', 'request.ts'));
       return workflow_request;
     };

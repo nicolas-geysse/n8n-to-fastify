@@ -660,7 +660,9 @@
     if (!usesNodeRetry(node))
       return operation;
     const maxTries = Math.min(5, Math.max(2, Math.trunc(Number(node.maxTries) || 3)));
-    const delay = Math.min(5000, Math.max(0, Math.trunc(Number(node.waitBetweenTries) || 1000)));
+    const configuredDelay = node.waitBetweenTries;
+    const delayNumber = typeof configuredDelay === "string" && configuredDelay.trim() ? Number(configuredDelay) : configuredDelay;
+    const delay = typeof delayNumber === "number" && Number.isFinite(delayNumber) ? Math.min(5000, Math.max(0, Math.trunc(delayNumber))) : 1000;
     return `runWithNodeRetry(() => ${operation}, ${maxTries}, ${delay})`;
   }
 
