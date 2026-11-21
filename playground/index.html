@@ -3,63 +3,123 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Client-side browser playground for n8n-to-fastify: transpile exported n8n workflow JSONs into standalone TypeScript/Fastify microservices." />
+  <meta name="description" content="n8n-to-fastify is an open-source Ahead-Of-Time (AOT) compiler that transpiles exported n8n workflow JSONs into standalone, bare-metal TypeScript and Fastify microservices with <5ms latency." />
   <meta name="msvalidate.01" content="1709B0AFB55D2F8CD1A090BD8CDB5DAE" />
   <meta name="google-site-verification" content="4V9YJiIcyJ-bMo4Y87KewwrjTmJk12KQIIO0m6MxQhI" />
-  <title>n8n-to-fastify Playground — Transpile n8n Workflows to TypeScript in Browser</title>
+  <link rel="canonical" href="https://rogeriomaciel.github.io/n8n-to-fastify/" />
+  <title>n8n-to-fastify — AOT Compiler &amp; Browser Playground (n8n JSON to Fastify TypeScript)</title>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "n8n-to-fastify",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Linux, macOS, Windows",
+    "softwareVersion": "0.2.0",
+    "license": "https://opensource.org/licenses/MIT",
+    "url": "https://rogeriomaciel.github.io/n8n-to-fastify/",
+    "mainEntityOfPage": "https://rogeriomaciel.com.br/en/n8n-to-fastify/",
+    "codeRepository": "https://github.com/rogeriomaciel/n8n-to-fastify",
+    "description": "Ahead-Of-Time (AOT) compiler that transpiles visual n8n workflow JSON exports into standalone TypeScript/Fastify microservices with in-memory subworkflow execution.",
+    "author": {
+      "@type": "Person",
+      "name": "Rogério Marinho Maciel",
+      "url": "https://rogeriomaciel.com.br/en/",
+      "sameAs": "https://github.com/rogeriomaciel"
+    }
+  }
+  </script>
   <style>
     :root {
       --bg: #07090e;
       --surface: #0b101b;
       --surface-2: #0f172a;
+      --surface-3: #131c2e;
       --border: rgba(255, 255, 255, 0.08);
+      --border-strong: rgba(255, 255, 255, 0.16);
       --text: #e2e8f0;
+      --text-bright: #f8fafc;
       --muted: #94a3b8;
       --emerald: #10b981;
       --emerald-bright: #34d399;
+      --emerald-dim: rgba(16, 185, 129, 0.12);
       --red: #ef4444;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
     }
     * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
       margin: 0;
-      background: var(--bg);
+      background:
+        radial-gradient(ellipse 80% 50% at 50% -10%, rgba(16, 185, 129, 0.14), transparent 65%),
+        var(--bg);
       color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
-      overflow: hidden;
+      font-family: var(--sans);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
     }
-    header {
+    a { color: inherit; }
+    .container {
+      width: 100%;
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Topbar */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: rgba(7, 9, 14, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+    }
+    .topbar-inner {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 12px 20px;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
       gap: 16px;
+      min-height: 64px;
       flex-wrap: wrap;
+      padding: 10px 0;
     }
     .brand {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
+      text-decoration: none;
     }
-    .brand h1 {
-      margin: 0;
+    .brand-title {
+      font-family: var(--mono);
       font-size: 16px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      color: #fff;
+      font-weight: 700;
+      color: var(--text-bright);
+      letter-spacing: -0.02em;
     }
-    .badge {
+    .pill {
+      font-family: var(--mono);
       font-size: 11px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      padding: 3px 8px;
+      font-weight: 600;
+      padding: 3px 9px;
       border-radius: 999px;
-      background: rgba(16, 185, 129, 0.12);
+      background: var(--emerald-dim);
       color: var(--emerald-bright);
       border: 1px solid rgba(16, 185, 129, 0.3);
     }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .nav-links a {
+      text-decoration: none;
+      transition: color 0.15s ease;
+    }
+    .nav-links a:hover { color: var(--text-bright); }
     .header-actions {
       display: flex;
       align-items: center;
@@ -68,8 +128,9 @@
     .btn {
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 6px;
-      padding: 7px 13px;
+      padding: 8px 14px;
       border-radius: 8px;
       font-size: 12px;
       font-weight: 600;
@@ -79,22 +140,131 @@
       color: var(--text);
       text-decoration: none;
       transition: all 0.15s ease;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-family: var(--mono);
+      white-space: nowrap;
     }
-    .btn:hover { border-color: rgba(255,255,255,0.22); background: #1e293b; }
-    .btn-star {
+    .btn:hover {
+      border-color: var(--border-strong);
+      background: #1e293b;
+      color: var(--text-bright);
+    }
+    .btn-primary {
       background: var(--emerald);
       color: #022c22;
       border-color: var(--emerald);
       font-weight: 700;
     }
-    .btn-star:hover { background: var(--emerald-bright); border-color: var(--emerald-bright); }
+    .btn-primary:hover {
+      background: var(--emerald-bright);
+      border-color: var(--emerald-bright);
+      color: #022c22;
+    }
+
+    /* Hero */
+    .hero {
+      padding: 56px 0 36px;
+      text-align: center;
+    }
+    .hero-eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--emerald-bright);
+      background: var(--emerald-dim);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      padding: 5px 12px;
+      border-radius: 999px;
+      margin-bottom: 18px;
+    }
+    .hero h1 {
+      margin: 0 auto 16px;
+      max-width: 820px;
+      font-size: clamp(30px, 4.4vw, 48px);
+      line-height: 1.12;
+      letter-spacing: -0.03em;
+      color: var(--text-bright);
+    }
+    .hero h1 span { color: var(--emerald-bright); }
+    .hero-sub {
+      margin: 0 auto 26px;
+      max-width: 720px;
+      font-size: 16px;
+      color: var(--muted);
+    }
+    .hero-actions {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 24px;
+    }
+    .cli-box {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 9px 16px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--emerald-bright);
+      max-width: 100%;
+      overflow-x: auto;
+    }
+    .cli-box span { color: var(--muted); user-select: none; }
+
+    /* KPI Strip */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-bottom: 36px;
+    }
+    .kpi-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px 20px;
+    }
+    .kpi-val {
+      font-family: var(--mono);
+      font-size: 24px;
+      font-weight: 700;
+      color: var(--emerald-bright);
+      margin-bottom: 4px;
+    }
+    .kpi-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-bright);
+    }
+    .kpi-sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    /* Playground Shell */
+    .playground-section {
+      padding-bottom: 56px;
+    }
+    .playground-shell {
+      background: var(--surface);
+      border: 1px solid var(--border-strong);
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+    }
     .toolbar {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 8px 20px;
-      background: var(--bg);
+      padding: 10px 16px;
+      background: var(--surface-2);
       border-bottom: 1px solid var(--border);
       gap: 12px;
       flex-wrap: wrap;
@@ -103,152 +273,387 @@
       display: flex;
       align-items: center;
       gap: 8px;
+      flex-wrap: wrap;
     }
     .tab {
-      padding: 5px 11px;
+      padding: 6px 12px;
       border-radius: 6px;
       font-size: 12px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-family: var(--mono);
       background: transparent;
       color: var(--muted);
       border: 1px solid transparent;
       cursor: pointer;
     }
     .tab.active {
-      background: var(--surface-2);
+      background: var(--surface);
       color: var(--emerald-bright);
-      border-color: var(--border);
+      border-color: var(--border-strong);
     }
     .stats {
+      font-family: var(--mono);
       font-size: 12px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       color: var(--emerald-bright);
+      padding-left: 6px;
     }
     .stats.error { color: var(--red); }
-    main {
-      flex: 1;
+    .editor-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      min-height: 0;
+      min-height: 520px;
+      height: 62vh;
+      max-height: 680px;
     }
     .pane {
       display: flex;
       flex-direction: column;
+      min-width: 0;
       min-height: 0;
       border-right: 1px solid var(--border);
     }
     .pane:last-child { border-right: none; }
     .pane-header {
-      padding: 8px 16px;
+      padding: 9px 16px;
       font-size: 11px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       text-transform: uppercase;
       letter-spacing: 0.06em;
+      font-family: var(--mono);
       color: var(--muted);
       background: var(--surface);
       border-bottom: 1px solid var(--border);
       display: flex;
       justify-content: space-between;
-      align-items: center;
+      gap: 8px;
     }
-    textarea {
-      flex: 1;
-      width: 100%;
-      border: none;
-      outline: none;
-      resize: none;
-      padding: 16px;
-      background: var(--bg);
-      color: #cbd5e1;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 13px;
-      line-height: 1.55;
-    }
-    pre {
+    textarea, pre {
       flex: 1;
       margin: 0;
       padding: 16px;
-      overflow: auto;
-      background: #05070b;
-      color: #a7f3d0;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 13px;
+      border: none;
+      outline: none;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--mono);
+      font-size: 12.5px;
       line-height: 1.55;
-      white-space: pre-wrap;
-      word-break: break-word;
+      overflow: auto;
+      resize: none;
     }
-    footer {
-      padding: 8px 20px;
-      background: var(--surface);
+    pre {
+      white-space: pre;
+      color: #cbd5e1;
+    }
+
+    /* Sections */
+    .section {
+      padding: 48px 0;
       border-top: 1px solid var(--border);
-      font-size: 12px;
+    }
+    .section-head {
+      margin-bottom: 24px;
+    }
+    .section-head h2 {
+      margin: 0 0 6px;
+      font-size: 24px;
+      letter-spacing: -0.02em;
+      color: var(--text-bright);
+    }
+    .section-head p {
+      margin: 0;
       color: var(--muted);
+      font-size: 14px;
+    }
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      transition: border-color 0.15s ease, transform 0.15s ease;
+    }
+    .card:hover {
+      border-color: rgba(16, 185, 129, 0.35);
+      transform: translateY(-1px);
+    }
+    .card-tag {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--emerald-bright);
+      margin-bottom: 8px;
+    }
+    .card h3 {
+      margin: 0 0 8px;
+      font-size: 16px;
+      color: var(--text-bright);
+    }
+    .card p {
+      margin: 0;
+      font-size: 13.5px;
+      color: var(--muted);
+    }
+    .guide-card {
+      display: block;
+      text-decoration: none;
+    }
+    .guide-link {
+      display: inline-block;
+      margin-top: 12px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--emerald-bright);
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 24px 0 36px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .footer-inner {
       display: flex;
       justify-content: space-between;
       align-items: center;
       flex-wrap: wrap;
-      gap: 10px;
+      gap: 12px;
     }
-    footer code {
+    .footer-links {
+      display: flex;
+      gap: 18px;
+      flex-wrap: wrap;
+    }
+    footer a {
       color: var(--emerald-bright);
-      background: var(--surface-2);
-      padding: 2px 6px;
-      border-radius: 4px;
+      text-decoration: none;
     }
-    footer a { color: var(--emerald-bright); text-decoration: none; }
-    @media (max-width: 860px) {
-      main { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
-      .pane { border-right: none; border-bottom: 1px solid var(--border); }
+    footer a:hover { text-decoration: underline; }
+
+    @media (max-width: 960px) {
+      .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+      .cards-grid { grid-template-columns: 1fr 1fr; }
+      .nav-links { display: none; }
+    }
+    @media (max-width: 720px) {
+      .kpi-grid { grid-template-columns: 1fr; }
+      .cards-grid { grid-template-columns: 1fr; }
+      .editor-grid {
+        grid-template-columns: 1fr;
+        height: auto;
+        max-height: none;
+      }
+      .pane {
+        min-height: 300px;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+      }
     }
   </style>
 </head>
 <body>
-  <header>
-    <div class="brand">
-      <h1>⚡ n8n-to-fastify</h1>
-      <span class="badge">100% Client-Side • Zero Data Leaves Your Browser</span>
-    </div>
-    <div class="header-actions">
-      <a class="btn" href="https://rogeriomaciel.com.br/en/" target="_blank" rel="noopener">Migration Consulting</a>
-      <a class="btn btn-star" href="https://github.com/rogeriomaciel/n8n-to-fastify" target="_blank" rel="noopener">⭐ Star on GitHub</a>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <a class="brand" href="#top">
+        <span class="brand-title">⚡ n8n-to-fastify</span>
+        <span class="pill">v0.2.0 • 100% Client-Side</span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="#playground">Playground</a>
+        <a href="#capabilities">Capabilities</a>
+        <a href="#guides">Architecture Guides</a>
+        <a href="https://rogeriomaciel.com.br/en/n8n-to-fastify/" target="_blank" rel="noopener">Official Page</a>
+      </nav>
+      <div class="header-actions">
+        <a class="btn" href="https://rogeriomaciel.com.br/en/" target="_blank" rel="noopener">Consulting</a>
+        <a class="btn btn-primary" href="https://github.com/rogeriomaciel/n8n-to-fastify" target="_blank" rel="noopener">⭐ Star on GitHub</a>
+      </div>
     </div>
   </header>
 
-  <div class="toolbar">
-    <div class="toolbar-group">
-      <button class="btn" id="btn-example">Load Lead Intake Example</button>
-      <button class="btn" id="btn-format">Format JSON</button>
-      <span id="status" class="stats">Ready</span>
-    </div>
-    <div class="toolbar-group">
-      <button class="tab active" data-tab="workflow">workflow.ts</button>
-      <button class="tab" data-tab="routes">routes/index.ts</button>
-      <button class="btn" id="btn-copy">Copy Code</button>
-      <button class="btn" id="btn-download">Download .ts</button>
-    </div>
-  </div>
-
-  <main>
-    <section class="pane">
-      <div class="pane-header">
-        <span>Input: n8n Workflow JSON</span>
-        <span>Paste any exported .json</span>
+  <section class="hero" id="top">
+    <div class="container">
+      <div class="hero-eyebrow">Ahead-Of-Time (AOT) Workflow Compiler • MIT Open Source</div>
+      <h1>Compile visual <span>n8n workflows</span> into bare-metal Fastify microservices</h1>
+      <p class="hero-sub">
+        Design visually in n8n during staging, then transpile exported workflow JSONs (including nested subworkflows) into standalone, zero-overhead TypeScript/Fastify services — eliminating OOM crashes, DB queue locks, and 200ms+ webhook latency.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="#playground">⚡ Try Live Browser Compiler</a>
+        <a class="btn" href="https://rogeriomaciel.com.br/en/n8n-to-fastify/" target="_blank" rel="noopener">Read Full Overview</a>
+        <a class="btn" href="https://github.com/rogeriomaciel/n8n-to-fastify/releases/tag/v0.2.0" target="_blank" rel="noopener">Release v0.2.0</a>
       </div>
-      <textarea id="json-input" spellcheck="false" placeholder="Paste your n8n workflow JSON here..."></textarea>
-    </section>
-
-    <section class="pane">
-      <div class="pane-header">
-        <span id="output-label">Output: Standalone TypeScript (Fastify)</span>
-        <span>&lt; 5ms runtime latency</span>
+      <div class="cli-box" aria-label="CLI command">
+        <span>$</span> bun run compile ./workflows --strict --out ./compiled-service
       </div>
-      <pre id="ts-output"></pre>
-    </section>
-  </main>
+    </div>
+  </section>
+
+  <section class="container">
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div class="kpi-val">&lt; 5 ms</div>
+        <div class="kpi-label">Webhook ACK Latency</div>
+        <div class="kpi-sub">~40x faster TTFB vs interpreted n8n</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-val">&lt; 0.05 ms</div>
+        <div class="kpi-label">Subworkflow Calls</div>
+        <div class="kpi-sub">In-memory WorkflowRegistry (~6,000x faster)</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-val">~25 MB</div>
+        <div class="kpi-label">Runtime Footprint</div>
+        <div class="kpi-sub">~98% RAM reduction under burst load</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-val">68 / 68</div>
+        <div class="kpi-label">Verified Test Suite</div>
+        <div class="kpi-sub">311 assertions across 22 suites in v0.2.0</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="playground-section" id="playground">
+    <div class="container">
+      <div class="playground-shell">
+        <div class="toolbar">
+          <div class="toolbar-group">
+            <button class="btn" id="btn-example">Load Lead Intake Example</button>
+            <button class="btn" id="btn-format">Format JSON</button>
+            <span id="status" class="stats">Ready</span>
+          </div>
+          <div class="toolbar-group">
+            <button class="tab active" data-tab="workflow">workflow.ts</button>
+            <button class="tab" data-tab="routes">routes/index.ts</button>
+            <button class="btn" id="btn-copy">Copy Code</button>
+            <button class="btn" id="btn-download">Download .ts</button>
+          </div>
+        </div>
+
+        <div class="editor-grid">
+          <section class="pane">
+            <div class="pane-header">
+              <span>Input: n8n Workflow JSON</span>
+              <span>Zero data leaves your browser</span>
+            </div>
+            <textarea id="json-input" spellcheck="false" placeholder="Paste your n8n workflow JSON here..."></textarea>
+          </section>
+
+          <section class="pane">
+            <div class="pane-header">
+              <span id="output-label">Output: Standalone TypeScript (Fastify)</span>
+              <span>&lt; 5ms runtime latency</span>
+            </div>
+            <pre id="ts-output"></pre>
+          </section>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="capabilities">
+    <div class="container">
+      <div class="section-head">
+        <h2>Production-Grade Compiler Capabilities (v0.2.0)</h2>
+        <p>Everything compiled ahead-of-time into readable TypeScript with strict build-time validation.</p>
+      </div>
+      <div class="cards-grid">
+        <article class="card">
+          <span class="card-tag">ROUTING &amp; BATCHES</span>
+          <h3>Per-Item IF/Switch &amp; Positional Merge</h3>
+          <p>Deterministic per-item branching across rules and expressions, reconverging batch isolation, and positional Merge across up to 10 destination ports.</p>
+        </article>
+        <article class="card">
+          <span class="card-tag">MESSAGING</span>
+          <h3>RabbitMQ Publishers &amp; Ack Triggers</h3>
+          <p>Exchange-mode confirm publishers plus queue consumers that acknowledge only after workflow success, requeue on failure, and drain gracefully on SIGINT/SIGTERM.</p>
+        </article>
+        <article class="card">
+          <span class="card-tag">BINARY &amp; STORAGE</span>
+          <h3>S3 v1, Multipart &amp; Anti-Zip-Bomb</h3>
+          <p>S3 file downloads, HTTP multipart binary uploads, Convert to JSON File, Edit Fields binary preservation, and ZIP/GZIP decompression with strict Zip-Bomb &amp; Zip-Slip guards.</p>
+        </article>
+        <article class="card">
+          <span class="card-tag">CONTROL FLOW</span>
+          <h3>Bounded Polling, Wait &amp; Stop/Error</h3>
+          <p>Single-entry polling loops capped by <code>N8N_TO_FASTIFY_POLL_MAX_ATTEMPTS</code>, dynamic runtime Wait intervals, disabled-node passthrough, and terminal Stop and Error nodes.</p>
+        </article>
+        <article class="card">
+          <span class="card-tag">CODE &amp; EDIT FIELDS</span>
+          <h3>$env, --dependencies &amp; JSON Output</h3>
+          <p>Runtime <code>$env</code> access, declared npm <code>--dependencies</code>, legacy <code>$node</code> Proxy bindings, <code>continueRegularOutput</code>, and Edit Fields v3.4 raw JSON Output.</p>
+        </article>
+        <article class="card">
+          <span class="card-tag">SECURITY &amp; OPS</span>
+          <h3>--strict Checks, Traces &amp; Error Redaction</h3>
+          <p>Fail-fast <code>--strict</code> diagnostics, opt-in metadata-only JSON traces (<code>N8N_TO_FASTIFY_TRACE=1</code>), and correlation-ID webhook 500 error redaction.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="guides">
+    <div class="container">
+      <div class="section-head">
+        <h2>Architecture Guides &amp; Deep Dives</h2>
+        <p>Engineering notes published on <a href="https://rogeriomaciel.com.br/en/n8n-to-fastify/" target="_blank" rel="noopener" style="color: var(--emerald-bright);">rogeriomaciel.com.br</a> explaining the compiler internals.</p>
+      </div>
+      <div class="cards-grid">
+        <a class="card guide-card" href="https://rogeriomaciel.com.br/en/solutions/n8n-out-of-memory-oom-solution/" target="_blank" rel="noopener">
+          <span class="card-tag">ARCHITECTURE</span>
+          <h3>Solving n8n OOM Crashes</h3>
+          <p>Why visual execution trees exhaust RAM under webhook spikes and how compiled Fastify workers cut memory overhead by ~98%.</p>
+          <span class="guide-link">Read guide →</span>
+        </a>
+        <a class="card guide-card" href="https://rogeriomaciel.com.br/en/solutions/compile-n8n-rabbitmq-ack-after-success/" target="_blank" rel="noopener">
+          <span class="card-tag">MESSAGING</span>
+          <h3>RabbitMQ Post-Success Ack</h3>
+          <p>Preserving at-least-once delivery semantics, deferred ack/nack, and graceful consumer draining in compiled services.</p>
+          <span class="guide-link">Read guide →</span>
+        </a>
+        <a class="card guide-card" href="https://rogeriomaciel.com.br/en/solutions/redact-webhook-errors-structured-tracing-fastify/" target="_blank" rel="noopener">
+          <span class="card-tag">OBSERVABILITY</span>
+          <h3>Error Redaction &amp; JSON Tracing</h3>
+          <p>Keeping HTTP error responses safe at the edge with correlation IDs while emitting opt-in execution traces internally.</p>
+          <span class="guide-link">Read guide →</span>
+        </a>
+        <a class="card guide-card" href="https://rogeriomaciel.com.br/en/solutions/preserve-binary-data-s3-multipart-compiled-workflows/" target="_blank" rel="noopener">
+          <span class="card-tag">BINARY PIPELINES</span>
+          <h3>S3, Binary Data &amp; Multipart</h3>
+          <p>Handling S3 v1 downloads, Edit Fields binary preservation, and native FormData multipart uploads cleanly.</p>
+          <span class="guide-link">Read guide →</span>
+        </a>
+        <a class="card guide-card" href="https://rogeriomaciel.com.br/en/solutions/strict-workflow-compatibility-checks-deterministic-routing/" target="_blank" rel="noopener">
+          <span class="card-tag">CORRECTNESS</span>
+          <h3>--strict &amp; Deterministic Routing</h3>
+          <p>Failing fast at build time on unsupported options, per-item IF/Switch routing, and bounded polling loops.</p>
+          <span class="guide-link">Read guide →</span>
+        </a>
+        <a class="card guide-card" href="https://rogeriomaciel.com.br/en/solutions/gitops-cicd-n8n-production/" target="_blank" rel="noopener">
+          <span class="card-tag">GITOPS &amp; CI/CD</span>
+          <h3>GitOps for n8n Workflows</h3>
+          <p>Turning exported workflow JSONs into repeatable CI-compiled TypeScript services with zero runtime n8n overhead.</p>
+          <span class="guide-link">Read guide →</span>
+        </a>
+      </div>
+    </div>
+  </section>
 
   <footer>
-    <span>Want full multi-workflow compilation, in-memory subworkflow registry &amp; CI/CD? Run: <code>bun run compile ./workflows --out ./dist</code></span>
-    <span>Built by <a href="https://github.com/rogeriomaciel" target="_blank" rel="noopener">Rogério Maciel</a></span>
+    <div class="container footer-inner">
+      <span>Built by <a href="https://rogeriomaciel.com.br/en/" target="_blank" rel="noopener">Rogério Maciel</a> — MIT Open Source</span>
+      <div class="footer-links">
+        <a href="https://rogeriomaciel.com.br/en/n8n-to-fastify/" target="_blank" rel="noopener">rogeriomaciel.com.br</a>
+        <a href="https://github.com/rogeriomaciel/n8n-to-fastify" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/rogeriomaciel/n8n-to-fastify/releases/tag/v0.2.0" target="_blank" rel="noopener">v0.2.0 Release</a>
+        <a href="./llms.txt">llms.txt</a>
+        <a href="./sitemap.xml">sitemap.xml</a>
+      </div>
+    </div>
   </footer>
 
   <script src="./compiler.js"></script>
