@@ -1424,11 +1424,13 @@ ${legacyBinding}${execution}
   }
 
   // src/compiler/polling-code.ts
-  function emitPollingLoop(loop, nodes, mapNode, wrapNode) {
+  function emitPollingLoop(loop, nodes, mapNode, wrapNode, trackedEdges) {
     const { entry, terminalExits, repeatPort, ...runtimePlan } = loop;
     const entryNode = nodes.get(entry);
     const initial = entryNode.incomingConnections.find((connection) => !loop.nodes.includes(connection.sourceNode));
-    const inputBatches = "ctx.getNodeOutputBatches(" + JSON.stringify(initial.sourceNode) + ", " + initial.outputIndex + ")";
+    const trackedEntry = trackedEdges?.find((edge) => edge.source === initial.sourceNode && edge.output === initial.outputIndex);
+    const runner = trackedEntry ? "appendBatches.runPollingLoop" : "ctx.runPollingLoop";
+    const inputBatches = trackedEntry ? JSON.stringify(trackedEntry) : "ctx.getNodeOutputBatches(" + JSON.stringify(initial.sourceNode) + ", " + initial.outputIndex + ")";
     let body = "";
     for (const [index, name] of loop.nodes.entries()) {
       const node = nodes.get(name);
@@ -1453,7 +1455,7 @@ ${legacyBinding}${execution}
       body += "    if (ctx.getNodeOutput(" + JSON.stringify(name) + ", " + repeatPort + `)?.length) assertCanRetry();
 `;
     }
-    return "  await ctx.runPollingLoop(" + JSON.stringify(runtimePlan) + ", " + inputBatches + `, async (pollingItems, assertCanRetry) => {
+    return "  await " + runner + "(" + JSON.stringify(runtimePlan) + ", " + inputBatches + `, async (pollingItems, assertCanRetry) => {
 ` + body + `  });
 `;
   }
@@ -1658,7 +1660,9 @@ ctx.setNodeOutput(${nodeName}, inputItems);`;
         const loop = loopsByMember.get(node.name);
         if (loop) {
           if (node.name === loop.entry) {
-            bodyCode += emitPollingLoop(loop, nodesByName, mapNode, (member, condition, code) => this.generateNodeBlock(wf.id, member, condition, code));
+            const trackedEdges = appendPlan.tracked.has(loop.decision) ? appendPlan.orderedEdges(node) : undefined;
+            const wrapLoopNode = (member, condition, code) => this.generateNodeBlock(wf.id, member, condition, code);
+            bodyCode += emitPollingLoop(loop, nodesByName, mapNode, wrapLoopNode, trackedEdges);
           }
           return;
         }

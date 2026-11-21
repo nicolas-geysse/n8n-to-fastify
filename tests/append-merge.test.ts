@@ -161,3 +161,71 @@ test('Append keeps a partial delivery ahead of its Combine by Position descendan
     Relay: output(edge('Append')),
   }, [['PartialData', 'Base'], ['Combined']]);
 });
+
+test('Append orders Combine by Position by the completing input from the same dispatch', async () => {
+  await checkWorkflow([
+    source('Start', 0), source('Base', -10), source('Sibling', 0),
+    {
+      name: 'Combine', type: 'n8n-nodes-base.merge', typeVersion: 3.2, position: [0, 0],
+      parameters: { mode: 'combine', combineBy: 'combineByPosition' },
+    },
+    code('Relay', 0, 'return [{ json: { id: "Combined" } }];'),
+  ], {
+    Start: output(edge('Base'), edge('Combine'), edge('Sibling'), edge('Combine', 1)),
+    Base: output(edge('Append', 1)),
+    Combine: output(edge('Relay')),
+    Relay: output(edge('Append')),
+    Sibling: output(edge('Append')),
+  }, [['Combined', 'Base'], ['Sibling']]);
+});
+
+test.each([
+  ['first attempt', [0]],
+  ['one retry', [1]],
+  ['separate exits', [0, 1]],
+] as const)('Append preserves polling exit delivery order for %s', async (_, attempts) => {
+  const data = attempts.map((remaining, index) => ({ json: { id: 'PartialData ' + index, remaining } }));
+  await checkWorkflow([
+    source('Start', 0), source('Base', 10),
+    code('Data', 20, `return ${JSON.stringify(data)};`),
+    code('Empty', 30, 'return [];'),
+    append('Partial', 10),
+    source('Sibling', 15),
+    code('Polled', 20, 'return $input.all().map(({ json }) => ({ json: { id: "Polled " + json.id + " after " + json.polls } }));'),
+    code('Poll', 20, `
+      return $input.all().map(({ json }) => ({
+        json: { ...json, ready: json.remaining <= 0, remaining: json.remaining - 1, polls: (json.polls ?? 0) + 1 },
+      }));
+    `),
+    {
+      name: 'Ready', type: 'n8n-nodes-base.if', typeVersion: 2.2, position: [100, 20],
+      parameters: { conditions: {
+        options: { caseSensitive: true, leftValue: '', typeValidation: 'strict', version: 2 },
+        combinator: 'and',
+        conditions: [{
+          leftValue: '={{ $json.ready }}', rightValue: '',
+          operator: { type: 'boolean', operation: 'true', singleValue: true },
+        }],
+      } },
+    },
+    {
+      name: 'Wait', type: 'n8n-nodes-base.wait', typeVersion: 1.1, position: [200, 30],
+      parameters: { resume: 'timeInterval', amount: 0 },
+    },
+  ], {
+    Start: output(edge('Base'), edge('Data'), edge('Empty')),
+    Base: output(edge('Append', 1)),
+    Data: output(edge('Partial')),
+    Empty: output(edge('Partial', 1)),
+    Partial: output(edge('Append'), edge('Poll'), edge('Sibling')),
+    Sibling: output(edge('Append')),
+    Poll: output(edge('Ready')),
+    Ready: { main: [[edge('Polled')], [edge('Wait')]] },
+    Polled: output(edge('Append')),
+    Wait: output(edge('Poll')),
+  }, [
+    [...data.map(item => item.json.id), 'Base'],
+    ['Sibling'],
+    ...data.map(({ json }) => [`Polled ${json.id} after ${json.remaining + 1}`]),
+  ]);
+});

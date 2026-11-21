@@ -1,9 +1,14 @@
 import type { N8nItem } from './n8n-helper';
-import type { WorkflowContext } from './workflow-context';
+import type { PollingRun, WorkflowContext } from './workflow-context';
 
 interface OrderedBatch {
   items: N8nItem[];
   order: number[];
+}
+
+interface Delivery extends OrderedBatch {
+  input: number;
+  priority: number;
 }
 
 export interface BatchEdge {
@@ -19,6 +24,11 @@ function compareOrder(left: number[], right: number[]): number {
     if (left[i] !== right[i]) return left[i] - right[i];
   }
   return left.length - right.length;
+}
+
+function compareDelivery(a: Delivery, b: Delivery): number {
+  // The native stack receives a producer's edges in reverse execution order.
+  return compareOrder(a.order, b.order) || b.priority - a.priority;
 }
 
 /**
@@ -49,26 +59,28 @@ export class AppendBatches {
     })));
   }
 
+  private deliveries(edges: BatchEdge[]): Delivery[] {
+    return edges.flatMap(edge => this.read(edge)
+      .filter(batch => batch.items.length > 0)
+      .map(batch => ({ ...batch, input: edge.input, priority: edge.priority })));
+  }
+
   recordMergedOutput(node: string, edges: BatchEdge[]): void {
-    // These mappers combine all inputs in one run, so carry the latest
-    // contributing delivery through to their single output batch.
-    let latest: number[] | undefined;
-    for (const { items, order } of this.inputs(edges)) {
-      if (items.length > 0 && (!latest || compareOrder(order, latest) > 0)) latest = order;
+    // Single-run Merge mappers carry the last contributing delivery.
+    let latest: Delivery | undefined;
+    for (const delivery of this.deliveries(edges)) {
+      if (!latest || compareDelivery(delivery, latest) > 0) latest = delivery;
     }
     const orders = new Map<number, number[][]>();
     if (latest) {
-      for (const port of this.ctx.getActiveOutputIndexes(node)) orders.set(port, [latest]);
+      const order = [...latest.order, latest.priority];
+      for (const port of this.ctx.getActiveOutputIndexes(node)) orders.set(port, [order]);
     }
     this.outputOrders.set(node, orders);
   }
 
   append(edges: BatchEdge[]): OrderedBatch[] {
-    const arrivals = edges.flatMap(edge => this.read(edge)
-      .filter(batch => batch.items.length > 0)
-      .map(batch => ({ ...batch, input: edge.input, priority: edge.priority })));
-    // The native stack receives a producer's edges in reverse execution order.
-    arrivals.sort((a, b) => compareOrder(a.order, b.order) || b.priority - a.priority);
+    const arrivals = this.deliveries(edges).sort(compareDelivery);
 
     if (!arrivals.length) return [];
 
@@ -108,6 +120,21 @@ export class AppendBatches {
       }
     });
     return runs;
+  }
+
+  async runPollingLoop(
+    plan: PollingRun,
+    entry: BatchEdge,
+    execute: (items: N8nItem[], assertCanRetry: () => void) => Promise<void>,
+  ): Promise<void> {
+    const batches = this.inputs([entry]);
+    const orders = new Map<number, number[][]>();
+    await this.ctx.runPollingLoop(plan, batches.map(batch => batch.items), execute, (port, inputIndex, attempt) => {
+      const portOrders = orders.get(port) ?? [];
+      portOrders.push([...batches[inputIndex].order, attempt]);
+      orders.set(port, portOrders);
+    });
+    this.outputOrders.set(plan.decision, orders);
   }
 
   async run(node: string, batches: OrderedBatch[], execute: (items: N8nItem[]) => Promise<void>): Promise<void> {

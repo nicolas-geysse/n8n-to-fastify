@@ -144,9 +144,10 @@ const DateTime = {
       const loop = loopsByMember.get(node.name);
       if (loop) {
         if (node.name === loop.entry) {
-          bodyCode += emitPollingLoop(loop, nodesByName, mapNode, (member, condition, code) =>
-            this.generateNodeBlock(wf.id, member, condition, code)
-          );
+          const trackedEdges = appendPlan.tracked.has(loop.decision) ? appendPlan.orderedEdges(node) : undefined;
+          const wrapLoopNode = (member: N8nNode, condition: string, code: string) =>
+            this.generateNodeBlock(wf.id, member, condition, code);
+          bodyCode += emitPollingLoop(loop, nodesByName, mapNode, wrapLoopNode, trackedEdges);
         }
         return;
       }
