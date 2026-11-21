@@ -309,7 +309,7 @@
       const schedule = pollingLoops.length ? projectPollingSchedule(nodes, connections, pollingLoops) : { nodes, connections };
       const entryGroups = new Map(pollingLoops.map((loop) => [loop.entry, loop.nodes]));
       const nodeByName = new Map(nodes.map((node) => [node.name, node]));
-      const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections).flatMap((node) => entryGroups.get(node.name)?.map((name) => nodeByName.get(name)) ?? [node]);
+      const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections).flatMap((node) => entryGroups.get(node.name)?.map((name2) => nodeByName.get(name2)) ?? [node]);
       return {
         id,
         name,
@@ -501,6 +501,12 @@
   }
 
   // src/compiler/mappers/code-context.ts
+  function usesCodeNodeLookups(node) {
+    if (!node.type.includes("code") && !node.type.includes("function"))
+      return false;
+    const code = node.parameters?.jsCode || node.parameters?.functionCode;
+    return typeof code === "string" && /\$\s*\(/.test(code);
+  }
   function usesLegacyNodeReferences(node) {
     if (!node.type.includes("code") && !node.type.includes("function"))
       return false;
@@ -594,7 +600,7 @@
     const includeAll = params.includeOtherFields === true && (params.include ?? "all") === "all";
     const stripBinary = options.stripBinary ?? true;
     const dotNotation = options.dotNotation ?? true;
-    const legacyBinding = ctx.legacyNodePorts ? "const $node = createLegacyNodeReferences(ctx, legacyNodeNames, " + JSON.stringify(ctx.legacyNodePorts) + ", itemIndex);" : "";
+    const legacyBinding = ctx.legacyNodePorts ? "const $node = createLegacyNodeReferences(ctx, workflowNodeNames, " + JSON.stringify(ctx.legacyNodePorts) + ", itemIndex);" : "";
     return [
       "{",
       "  const source: N8nItem[] = " + (ctx.previousVariableName ?? "inputItems") + ";",
@@ -989,9 +995,10 @@
       const params = ctx.node.parameters || {};
       const rawCode = params.jsCode || params.functionCode || "return $input.all();";
       const prevVar = ctx.previousVariableName || "inputItems";
-      const legacyBinding = ctx.legacyNodePorts ? `      const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});
+      const legacyBinding = ctx.legacyNodePorts ? `      const $node = createLegacyNodeReferences(ctx, workflowNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});
 ` : "";
-      const nodeLookupBinding = /\$\s*\(/.test(rawCode) ? `      const $ = (name: string) => {
+      const nodeLookupBinding = usesCodeNodeLookups(ctx.node) ? `      const $ = (name: string) => {
+        if (!workflowNodeNames.has(name)) throw new Error("Referenced node doesn't exist");
         const target = ctx.getNode(name);
         return {
           first: () => target.first() ?? { json: {} },
@@ -1482,8 +1489,8 @@ ${legacyBinding}${nodeLookupBinding}${execution}
       }
     }
     let hasIncoming = false;
-    for (const outputs of Object.values(workflow.connections)) {
-      for (const [type, ports] of Object.entries(outputs)) {
+    for (const outputs2 of Object.values(workflow.connections)) {
+      for (const [type, ports] of Object.entries(outputs2)) {
         for (const targets of ports) {
           for (const target of targets ?? []) {
             if (target?.node !== node.name)
@@ -1517,7 +1524,7 @@ ${legacyBinding}${nodeLookupBinding}${execution}
 ` : "";
       const legacyImport = legacyNodes.size > 0 ? `import { createLegacyNodeReferences } from '${runtimePrefix}/code-context';
 ` : "";
-      const legacyNames = legacyNodes.size > 0 ? `const legacyNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map((node) => node.name))});
+      const workflowNodeNames = legacyNodes.size > 0 || wf.nodes.some(usesCodeNodeLookups) ? `const workflowNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map((node) => node.name))});
 ` : "";
       const nodesByName = new Map(wf.nodes.map((node) => [node.name, node]));
       const rabbitMqImport = wf.nodes.some((node) => node.type === rabbitMqPublisherType) ? `import { publishRabbitMq } from '${runtimePrefix}/rabbitmq';
@@ -1538,7 +1545,7 @@ ${legacyBinding}${nodeLookupBinding}${execution}
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
 ${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
-${legacyNames}
+${workflowNodeNames}
 const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),

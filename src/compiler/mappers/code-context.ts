@@ -1,5 +1,11 @@
 import type { N8nNode } from '../core-parser';
 
+export function usesCodeNodeLookups(node: N8nNode): boolean {
+  if (!node.type.includes('code') && !node.type.includes('function')) return false;
+  const code = node.parameters?.jsCode || node.parameters?.functionCode;
+  return typeof code === 'string' && /\$\s*\(/.test(code);
+}
+
 export function usesLegacyNodeReferences(node: N8nNode): boolean {
   if (!node.type.includes('code') && !node.type.includes('function')) return false;
   const code = node.parameters?.jsCode || node.parameters?.functionCode;

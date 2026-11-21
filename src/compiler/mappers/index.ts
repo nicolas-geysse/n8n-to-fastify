@@ -1,7 +1,7 @@
 import { N8nNode } from '../parser';
 import { ExpressionParser } from '../expression-parser';
 import { isPositionMerge, mapPositionMerge } from './position-merge';
-import { getLegacyNodeReferenceIssue } from './code-context';
+import { getLegacyNodeReferenceIssue, usesCodeNodeLookups } from './code-context';
 import { continuesCodeOnRegularOutput } from './code-errors';
 import { getRawEditFieldsIssue, isRawEditFields, mapRawEditFields } from './raw-edit-fields';
 import { mapRabbitMqPublisher, rabbitMqPublisherType } from './rabbitmq';
@@ -145,10 +145,11 @@ export class NodeMappers {
     const rawCode = params.jsCode || params.functionCode || 'return $input.all();';
     const prevVar = ctx.previousVariableName || 'inputItems';
     const legacyBinding = ctx.legacyNodePorts
-      ? `      const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});\n`
+      ? `      const $node = createLegacyNodeReferences(ctx, workflowNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});\n`
       : '';
 
-    const nodeLookupBinding = /\$\s*\(/.test(rawCode) ? `      const $ = (name: string) => {
+    const nodeLookupBinding = usesCodeNodeLookups(ctx.node) ? `      const $ = (name: string) => {
+        if (!workflowNodeNames.has(name)) throw new Error("Referenced node doesn't exist");
         const target = ctx.getNode(name);
         return {
           first: () => target.first() ?? { json: {} },
