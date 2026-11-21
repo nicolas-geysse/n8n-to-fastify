@@ -134,3 +134,30 @@ test('parallel partial Append nodes feed another Append in waiting order', async
     'First Merge': output(edge('Append')),
   }, [['A', 'C'], ['B']]);
 });
+
+test('Append keeps a partial delivery ahead of its Combine by Position descendant', async () => {
+  await checkWorkflow([
+    source('Start', 0), source('PartialData', 10), source('Base', 20),
+    code('Partner', 30, 'return [{ json: { partner: true } }];'),
+    code('Empty', 40, 'return [];'),
+    append('Partial', 10),
+    {
+      name: 'Combine', type: 'n8n-nodes-base.merge', typeVersion: 3.2, position: [400, 10],
+      parameters: { mode: 'combine', combineBy: 'combineByPosition' },
+    },
+    code('Relay', 10, `
+      return $input.all().map(({ json }) => ({
+        json: { id: json.id === "PartialData" && json.partner ? "Combined" : "Unexpected" },
+      }));
+    `),
+  ], {
+    Start: output(edge('PartialData'), edge('Base'), edge('Partner'), edge('Empty')),
+    PartialData: output(edge('Partial')),
+    Empty: output(edge('Partial', 1)),
+    Base: output(edge('Append', 1)),
+    Partner: output(edge('Combine', 1)),
+    Partial: output(edge('Append'), edge('Combine')),
+    Combine: output(edge('Relay')),
+    Relay: output(edge('Append')),
+  }, [['PartialData', 'Base'], ['Combined']]);
+});

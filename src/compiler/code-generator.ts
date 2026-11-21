@@ -165,7 +165,7 @@ const DateTime = {
       }
 
       const isAppend = appendPlan.merges.has(node.name);
-      const tracksBatches = appendPlan.tracked.has(node.name) && runPerIncomingBatch;
+      const tracksBatches = appendPlan.tracked.has(node.name) && incoming.length > 0;
       const nodeName = JSON.stringify(node.name);
       const prevExpr = runPerIncomingBatch ? 'incomingItems' : 'inputItems';
       let nodeCode: string;
@@ -180,7 +180,7 @@ const DateTime = {
   item = ${varName}[0] || { json: {} };
   ctx.setNodeOutput(${nodeName}, ${varName});
 });`;
-      } else if (tracksBatches) {
+      } else if (tracksBatches && runPerIncomingBatch) {
         const edges = JSON.stringify(appendPlan.orderedEdges(node));
         nodeCode = `await appendBatches.run(${nodeName}, appendBatches.inputs(${edges}), async (incomingItems) => {
 ${mapNode(node, prevExpr).trim()}
@@ -195,6 +195,10 @@ ${mapNode(node, prevExpr).trim()}
 });`;
       } else {
         nodeCode = mapNode(node, prevExpr);
+        if (tracksBatches) {
+          const edges = JSON.stringify(appendPlan.orderedEdges(node));
+          nodeCode += `\nappendBatches.recordMergedOutput(${nodeName}, ${edges});`;
+        }
       }
 
       const ancestorTriggers = node.ancestorTriggers ?? [];

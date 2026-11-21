@@ -49,6 +49,20 @@ export class AppendBatches {
     })));
   }
 
+  recordMergedOutput(node: string, edges: BatchEdge[]): void {
+    // These mappers combine all inputs in one run, so carry the latest
+    // contributing delivery through to their single output batch.
+    let latest: number[] | undefined;
+    for (const { items, order } of this.inputs(edges)) {
+      if (items.length > 0 && (!latest || compareOrder(order, latest) > 0)) latest = order;
+    }
+    const orders = new Map<number, number[][]>();
+    if (latest) {
+      for (const port of this.ctx.getActiveOutputIndexes(node)) orders.set(port, [latest]);
+    }
+    this.outputOrders.set(node, orders);
+  }
+
   append(edges: BatchEdge[]): OrderedBatch[] {
     const arrivals = edges.flatMap(edge => this.read(edge)
       .filter(batch => batch.items.length > 0)
