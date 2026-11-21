@@ -1,8 +1,24 @@
 import type { N8nNode } from '../core-parser';
 import { ExpressionParser } from '../expression-parser';
 
+export function continuesHttpOnErrorOutput(node: N8nNode): boolean {
+  return node.type === 'n8n-nodes-base.httpRequest' && node.typeVersion === 4.2 && node.onError === 'continueErrorOutput';
+}
+
+export function continuesHttpOnRegularOutput(node: N8nNode): boolean {
+  return node.type === 'n8n-nodes-base.httpRequest' && node.onError === 'continueRegularOutput';
+}
+
+export function usesHttpLegacyNodeReferences(node: N8nNode): boolean {
+  return node.type === 'n8n-nodes-base.httpRequest' && /\$node\b/.test(JSON.stringify(node.parameters ?? {}));
+}
+
 export function usesMultipartBody(params: N8nNode['parameters']): boolean {
   return params?.sendBody === true && params.contentType === 'multipart-form-data';
+}
+
+export function usesFileResponse(params: N8nNode['parameters']): boolean {
+  return params?.options?.response?.response?.responseFormat === 'file';
 }
 
 export function usesJsonHeaders(params: N8nNode['parameters']): boolean {

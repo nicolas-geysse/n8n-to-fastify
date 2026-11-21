@@ -56,3 +56,39 @@ test('strict mode flags disabled nodes connected to secondary inputs', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a disabled Merge passes through the transformed input batch', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'n2f-disabled-merge-'));
+  try {
+    const input = path.join(dir, 'merge.json');
+    const output = path.join(dir, 'service');
+    writeFileSync(input, JSON.stringify({
+      nodes: [
+        {
+          name: 'Source', type: 'n8n-nodes-base.code', typeVersion: 2,
+          parameters: { jsCode: 'return [{ json: { marker: "upstream-node" } }];' },
+        },
+        {
+          name: 'Disabled Merge', type: 'n8n-nodes-base.merge', typeVersion: 3.2,
+          disabled: true, parameters: {},
+        },
+        { name: 'After', type: 'n8n-nodes-base.code', parameters: { jsCode: 'return $input.all();' } },
+      ],
+      connections: {
+        Source: { main: [[{ node: 'Disabled Merge', type: 'main', index: 0 }]] },
+        'Disabled Merge': { main: [[{ node: 'After', type: 'main', index: 0 }]] },
+      },
+    }));
+    const result = Bun.spawnSync([
+      process.execPath, path.resolve('bin/cli.ts'), 'compile', input, '--out', output, '--strict',
+    ]);
+    expect(result.exitCode).toBe(0);
+    const { workflow_merge } = await import(path.join(output, 'workflows', 'merge.ts'));
+    const { items, context } = await workflow_merge([{ json: { marker: 'workflow-input' } }]);
+    const expected = [{ json: { marker: 'upstream-node' } }];
+    expect(context.getNode('Disabled Merge').all()).toEqual(expected);
+    expect(items).toEqual(expected);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

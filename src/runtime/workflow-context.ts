@@ -1,4 +1,5 @@
 import { N8nItem } from './n8n-helper';
+import { ItemMatching } from './item-matching';
 import { WorkflowTrace } from './workflow-trace';
 import type { NodeTraceSink } from './workflow-trace';
 
@@ -15,6 +16,20 @@ interface PollingRun {
   exitPorts: number[];
 }
 
+export interface PollingDispatchPlan {
+  entry: string;
+  routes: Array<[string, { output: number; target: string }[]]>;
+  boundaryRoutes: PollingDispatchPlan['routes'];
+}
+
+function pollingAttemptLimit(): number {
+  const limit = Number(process.env.N8N_TO_FASTIFY_POLL_MAX_ATTEMPTS ?? 100);
+  if (!Number.isSafeInteger(limit) || limit < 1) {
+    throw new Error('N8N_TO_FASTIFY_POLL_MAX_ATTEMPTS must be a positive integer');
+  }
+  return limit;
+}
+
 /**
  * Runtime execution context for a single compiled workflow invocation.
  * Tracks node outputs, active conditional branches (IF/Switch), and webhook reply state.
@@ -23,6 +38,10 @@ export class WorkflowContext {
   private nodeOutputs = new Map<string, N8nItem[]>();
   private outputPorts = new Map<string, Map<number, N8nItem[]>>();
   private outputBatches = new Map<string, Map<number, N8nItem[][]>>();
+  private pollingExitBatches = new Map<string, Map<string, N8nItem[][]>>();
+  private itemMatching?: ItemMatching;
+  private batchInputs = new WeakMap<N8nItem[], N8nItem[]>();
+  private nodeRuns = new Map<string, Array<Map<number, N8nItem[]>>>();
   private activeBranches = new Map<string, Set<number>>();
   private executedNodes = new Set<string>();
   private readonly trace?: WorkflowTrace;
@@ -44,6 +63,11 @@ export class WorkflowContext {
   }
 
   public setNodeOutput(nodeName: string, items: N8nItem[], activeOutputIndex: number = 0): void {
+    this.writeNodeOutput(nodeName, items, activeOutputIndex);
+    this.recordNodeRun(nodeName, new Map([[activeOutputIndex, items]]));
+  }
+
+  private writeNodeOutput(nodeName: string, items: N8nItem[], activeOutputIndex: number): void {
     this.outputPorts.delete(nodeName);
     this.outputBatches.delete(nodeName);
     this.nodeOutputs.set(nodeName, items);
@@ -53,12 +77,28 @@ export class WorkflowContext {
   }
 
   public setNodeOutputs(nodeName: string, outputs: Iterable<[number, N8nItem[]]>, items: N8nItem[]): void {
+    const ports = new Map(outputs);
+    this.writeNodeOutputs(nodeName, ports, items);
+    this.recordNodeRun(nodeName, ports);
+  }
+
+  private recordNodeRun(nodeName: string, outputs: Map<number, N8nItem[]>): void {
+    let runs = this.nodeRuns.get(nodeName);
+    if (!runs) {
+      runs = [];
+      this.nodeRuns.set(nodeName, runs);
+    }
+    // Keep one entry per execution, even when a port produces no items.
+    runs.push(outputs);
+  }
+
+  private writeNodeOutputs(nodeName: string, outputs: Iterable<[number, N8nItem[]]>, items: N8nItem[]): void {
     this.activeBranches.delete(nodeName);
     this.outputBatches.delete(nodeName);
     const ports = new Map<number, N8nItem[]>();
     for (const [port, output] of outputs) {
       if (output.length > 0) {
-        this.setNodeOutput(nodeName, output, port);
+        this.writeNodeOutput(nodeName, output, port);
         ports.set(port, output);
       }
     }
@@ -80,13 +120,55 @@ export class WorkflowContext {
     return items === undefined ? [] : [items];
   }
 
+  public getItemMatchingBatches(nodeName: string, outputIndex: number): N8nItem[][] {
+    const matching = this.itemMatching ??= new ItemMatching();
+    return this.getNodeOutputBatches(nodeName, outputIndex).map(batch => {
+      const input = matching.select(nodeName, batch);
+      this.batchInputs.set(input, batch);
+      return input;
+    });
+  }
+
+  public getLinkedItem(nodeName: string, inputBatch: N8nItem[], index: number): N8nItem {
+    if (!this.itemMatching) throw new Error('Cannot resolve a unique linked item');
+    return this.itemMatching.resolve(nodeName, inputBatch, index);
+  }
+
+  public getNodeRunItems(nodeName: string, outputIndex: number, runIndex: number): N8nItem[] {
+    const runs = this.nodeRuns.get(nodeName);
+    if (!runs) throw new Error('Referenced node has not executed');
+    if (!Number.isInteger(runIndex) || runIndex < -1) throw new Error('Invalid referenced node run index');
+    const run = runs.at(runIndex);
+    if (!run) throw new Error('Referenced node run does not exist');
+    return run.get(outputIndex) ?? [];
+  }
+
+  public getOutputForInputBatch(nodeName: string, outputIndex: number, inputBatch: N8nItem[]): N8nItem[] | undefined {
+    const outputBatches = new Set(this.getNodeOutputBatches(nodeName, outputIndex));
+    const visited = new Set<N8nItem[]>();
+    // Each transformed batch retains its input relationship for named references.
+    for (let batch: N8nItem[] | undefined = inputBatch; batch && !visited.has(batch); batch = this.batchInputs.get(batch)) {
+      if (outputBatches.has(batch)) return batch;
+      visited.add(batch);
+    }
+  }
+
   public async runNodeBatches(
     nodeName: string,
     batches: N8nItem[][],
     run: (items: N8nItem[]) => Promise<void>,
   ): Promise<void> {
+    const runAndLinkOutputs = async (input: N8nItem[]) => {
+      await run(input);
+      for (const port of this.activeBranches.get(nodeName) ?? []) {
+        const output = this.getNodeOutput(nodeName, port);
+        if (!output) continue;
+        if (output !== input && !this.batchInputs.has(output)) this.batchInputs.set(output, input);
+        this.itemMatching?.record(nodeName, input, output);
+      }
+    };
     if (batches.length < 2) {
-      if (batches.length === 1) await run(batches[0]);
+      if (batches.length === 1) await runAndLinkOutputs(batches[0]);
       return;
     }
 
@@ -94,7 +176,7 @@ export class WorkflowContext {
     const all: N8nItem[][] = [];
     for (const input of batches) {
       this.clearNodeOutput(nodeName);
-      await run(input);
+      await runAndLinkOutputs(input);
 
       const items = this.nodeOutputs.get(nodeName);
       if (items?.length) all.push(items);
@@ -118,10 +200,7 @@ export class WorkflowContext {
     runAttempt: (items: N8nItem[], assertCanRetry: () => void) => Promise<void>,
   ): Promise<void> {
     if (!initialBatches.some(batch => batch.length)) return;
-    const limit = Number(process.env.N8N_TO_FASTIFY_POLL_MAX_ATTEMPTS ?? 100);
-    if (!Number.isSafeInteger(limit) || limit < 1) {
-      throw new Error('N8N_TO_FASTIFY_POLL_MAX_ATTEMPTS must be a positive integer');
-    }
+    const limit = pollingAttemptLimit();
 
     const exits = new Map<number, N8nItem[][]>();
     const completed: N8nItem[][] = [];
@@ -152,6 +231,68 @@ export class WorkflowContext {
     this.setBatchedOutputs(plan.decision, exits, completed);
   }
 
+  public async runMultiReturnPollingLoop(
+    plan: PollingDispatchPlan,
+    initialBatches: N8nItem[][],
+    steps: Array<[string, (items: N8nItem[]) => Promise<void>]>,
+  ): Promise<void> {
+    const byTarget = new Map<string, N8nItem[][]>();
+    this.pollingExitBatches.set(plan.entry, byTarget);
+    for (const [name] of steps) {
+      this.clearNodeOutput(name);
+      this.executedNodes.delete(name);
+    }
+    if (!initialBatches.some(batch => batch.length)) return;
+    const limit = pollingAttemptLimit();
+    const handlers = new Map(steps);
+    const routes = new Map(plan.routes);
+    const boundaryRoutes = new Map(plan.boundaryRoutes);
+    const exits = new Map<string, Map<number, N8nItem[][]>>();
+
+    for (const initial of initialBatches) {
+      if (!initial.length) continue;
+      let attempts = 0;
+      const pending = [{ name: plan.entry, items: initial }];
+      while (pending.length) {
+        const { name, items } = pending.pop()!;
+        if (name === plan.entry) {
+          if (attempts >= limit) throw new Error(`Polling loop exceeded its limit of ${limit} attempts`);
+          attempts++;
+        }
+        this.clearNodeOutput(name);
+        await this.runNodeBatches(name, [items], handlers.get(name)!);
+
+        const recordedPorts = new Set<number>();
+        for (const { output: port, target } of boundaryRoutes.get(name) ?? []) {
+          const output = this.getNodeOutput(name, port);
+          if (!output?.length) continue;
+          if (!byTarget.has(target)) byTarget.set(target, []);
+          byTarget.get(target)!.push(output);
+          if (recordedPorts.has(port)) continue;
+          recordedPorts.add(port);
+          if (!exits.has(name)) exits.set(name, new Map());
+          const batches = exits.get(name)!;
+          if (!batches.has(port)) batches.set(port, []);
+          batches.get(port)!.push(output);
+        }
+        // Use a stack to complete a higher canvas branch before starting its sibling.
+        const next = routes.get(name) ?? [];
+        for (let index = next.length - 1; index >= 0; index--) {
+          const { output, target } = next[index];
+          const batch = this.getNodeOutput(name, output);
+          if (batch?.length) pending.push({ name: target, items: batch });
+        }
+      }
+    }
+    for (const [name, batches] of exits) {
+      this.setBatchedOutputs(name, batches, [...batches.values()].flat());
+    }
+  }
+
+  public getPollingExitBatches(entry: string, target: string): N8nItem[][] {
+    return this.pollingExitBatches.get(entry)?.get(target) ?? [];
+  }
+
   private clearNodeOutput(nodeName: string): void {
     this.nodeOutputs.delete(nodeName);
     this.outputPorts.delete(nodeName);
@@ -160,7 +301,8 @@ export class WorkflowContext {
   }
 
   private setBatchedOutputs(nodeName: string, byPort: Map<number, N8nItem[][]>, all: N8nItem[][]): void {
-    this.setNodeOutputs(nodeName, [...byPort].map(([port, runs]) => [port, runs.flat()]), all.flat());
+    // Combining batches for propagation does not execute the node again.
+    this.writeNodeOutputs(nodeName, [...byPort].map(([port, runs]) => [port, runs.flat()]), all.flat());
     this.outputBatches.set(nodeName, byPort);
   }
 

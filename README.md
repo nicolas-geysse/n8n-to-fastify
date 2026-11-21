@@ -97,21 +97,26 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 | **Respond to Webhook** | `reply.code(status).send(payload)` with JSON/Text support |
 | **Code / Function** | Native async JavaScript execution with `$input`, `$json`, `$env`, and `$('Node')` bindings |
 | **Code on Error** | JavaScript Code running once for all items can emit `json.error` through its regular output |
+| **Code HTTP helper** | `this.helpers.httpRequest` supports HTTP(S) with `url`, `method`, `headers`, JSON or string `body`, `json`, `timeout`, `returnFullResponse`, and `ignoreHttpStatusErrors` |
 | **Disabled nodes** | Skips detached nodes and passes a single main input through to output 0 |
 | **Execute Workflow** | Direct in-memory function invocation via `WorkflowRegistry` |
 | **IF** | Routes each item to its true or false output |
 | **Filter** | Deterministic branch tracking |
 | **Switch** | Routes each item by rule or output-index expression, with configurable fallback in rules mode |
 | **Set / Edit Fields** | Manual assignments, v3.4 JSON Output, dot-notation, `keepOnlySet`, and binary preservation |
-| **HTTP Request** | Native `fetch()` with JSON headers and JSON or multipart form bodies |
+| **HTTP Request** | Native `fetch()` with JSON headers, JSON or multipart bodies, and binary file responses |
+| **HTTP Request on Error** | v4.2 can route failed items to the error output with their input JSON, original item index, and a safe error summary |
 | **Aggregate** | In-memory item aggregation |
 | **Split Out** | Expands nested arrays into individual `N8nItem[]` items |
 | **Merge** | Appends branches or combines items by position across up to ten destination ports |
 | **PostgreSQL** | Parameterized SQL execution via `DATABASE_URL` |
+| **Postgres Trigger** | Start a workflow from notifications on an existing channel (`POSTGRES_TRIGGER_URL`) |
 | **RabbitMQ** | Publish messages to an existing exchange (`RABBITMQ_URL`) |
-| **RabbitMQ Trigger** | Consume a queue and acknowledge delivery after successful execution |
+| **RabbitMQ Trigger** | Consume a queue and acknowledge on receipt, completion, or successful completion |
 | **S3** | Downloads files into binary items from an S3-compatible endpoint |
 | **Convert to File** | Converts all input items into a single UTF-8 JSON binary file |
+| **Linked Basic LLM Chain** | Uses a primary chat model and an optional fallback from the exported model connections |
+| **Extract From File** | Moves inline binary files to base64 JSON strings, with per-item fields, nested object destinations, and source retention |
 | **Compression** | Decompresses inline ZIP and GZIP binary fields with anti-Zip-Bomb & path-traversal limits |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | In-process time intervals with version-specific defaults and runtime expressions |
@@ -119,10 +124,23 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 | **Stop and Error** | Stops an active workflow path with a message or structured error |
 
 > Legacy `$node["Node name"]` references in a `Code` node running once for all items read the first item from the connected output (`.json`, legacy `.data` alias, and `.binary` metadata).
+> JavaScript Code running once for all items can use `$('Node').itemMatching(index)` to follow a unique item through single-input batches. Missing and ambiguous links throw. Tracing through multi-input merges is outside this support.
 >
 > Compiled polling loops support a single-entry cycle with one timed `Wait` and one `IF` or `Switch` retry port; completed batches continue after the cycle and direct `Stop and Error` exits fail immediately. Set `N8N_TO_FASTIFY_POLL_MAX_ATTEMPTS` at runtime to override the default limit of `100` attempts per batch.
+>
+> Workflows exported with `executionOrder: v1` can also use two `Switch` return paths to the same entry, with one timed `Wait`. Batches follow canvas order through the loop and its exclusively connected single-input exits. Shared downstream nodes receive completed batches in order after the loop. A `Stop and Error` exit must belong exclusively to the loop so it can fail immediately. Both return paths share the limit on executions of the entry node for each incoming batch.
 
 ---
+
+## Linked Basic LLM Chain
+
+Basic LLM Chain v1.7 supports defined text prompts, text-only system/user/assistant messages, batching, and the primary and fallback model ports. It supports the v1 chat model nodes `lmChatGroq` and `lmChatOllama` with their text generation options.
+
+Set `N8N_LANGUAGE_MODEL_CONNECTIONS` to a JSON object keyed by the original model node IDs when starting the generated service. Each connection has a `baseUrl` and an optional `apiKeyEnv` naming an environment variable with the bearer token. Use the API base URL ending in `/v1` or its equivalent for chat completions, and the server base URL for Ollama. The service reads each model's configuration separately at runtime.
+
+```sh
+export N8N_LANGUAGE_MODEL_CONNECTIONS='{"example-model-node-id":{"baseUrl":"https://models.example.test/v1","apiKeyEnv":"MODEL_TOKEN"}}'
+```
 
 ## 📦 Code Node Dependencies
 
@@ -140,6 +158,31 @@ bun run start
 ```
 
 The compiler merges these entries into the generated `package.json`. Declare every third-party package the workflow may load, including packages resolved dynamically via `require()` or `import()`.
+
+## Community Node Adapters
+
+Register a local adapter for an action node by its exact exported `type` and `typeVersion`. Pass the manifest to `bun run compile ./workflows --adapters ./adapters.json --strict`.
+
+```json
+{
+  "schemaVersion": 1,
+  "adapters": [{
+    "type": "n8n-nodes-example.echo",
+    "typeVersion": 1,
+    "module": "./echo.mjs",
+    "parameters": ["message"]
+  }]
+}
+```
+
+```js
+export default ({ items, parameters }) => items.map((_, index) => ({
+  json: { message: parameters(index).message },
+  pairedItem: { item: index },
+}));
+```
+
+Use a trusted, self-contained `.mjs` or `.ts` module. The compiler copies selected modules into the generated service and merges their optional `dependencies` into its package manifest. Each adapter receives the input batch, basic `node` metadata, and a `parameters(index = 0)` function that evaluates the listed top-level parameters using the workflow context. Adapters return an array of n8n items for main output 0, synchronously or asynchronously. Read credentials from the runtime environment. Set `handlesRetries` to `true` when the module implements retry behavior using `node.retryOnFail`, `node.maxTries`, and `node.waitBetweenTries`.
 
 ---
 
@@ -204,9 +247,17 @@ The publisher evaluates the exchange and routing key using the first input item,
 
 ## 🐇 RabbitMQ Trigger
 
-The compiler supports RabbitMQ Trigger v1 with `executionFinishesSuccessfully` using the same `RABBITMQ_URL`. The generated service checks (or optionally declares via `assertQueue`) and binds the queue, limits unacknowledged deliveries with `parallelMessages`, and skips disabled triggers.
+The compiler supports RabbitMQ Trigger v1 using the same `RABBITMQ_URL`. The generated service checks (or optionally declares via `assertQueue`) and binds the queue, limits unacknowledged deliveries with `parallelMessages`, and skips disabled triggers.
 
-Each delivery triggers the branch with message fields, properties, and text (or parsed JSON when `jsonParseBody` is enabled), acknowledging after success, requeuing on failure, and draining in-flight executions on `SIGINT`/`SIGTERM`.
+The default `immediately` acknowledges when the message is received. When `parallelMessages` sets a finite limit, it defers acknowledgement until execution finishes, matching `executionFinishes`. The `executionFinishesSuccessfully` mode acknowledges after success and requeues on failure.
+
+Each delivery triggers the branch with message fields, properties, and text (or parsed JSON when `jsonParseBody` is enabled). The server drains in-flight executions on `SIGINT`/`SIGTERM`.
+
+## Postgres Trigger
+
+The compiler supports Postgres Trigger v1 in **Listen to Channel** mode with a static unquoted channel name. Set `POSTGRES_TRIGGER_URL` to a PostgreSQL connection URL at runtime. The generated service installs `pg` and opens a dedicated session for each enabled listener. Its notification envelope carries the channel, sender PID and payload. Valid JSON payloads are decoded and other payloads remain text.
+
+The listener reconnects after a dropped session. PostgreSQL delivers notifications only to currently listening sessions. When stopping, the service closes the listener and waits for workflows that already started.
 
 ---
 
@@ -216,13 +267,23 @@ The compiler supports `File / Download` from S3 node v1. Set `S3_ENDPOINT`, `AWS
 
 Each object is downloaded in order and stored as base64 under the configured binary property (`data` by default), preserving input JSON and other binary fields. The generated `package.json` includes `@aws-sdk/client-s3` and `mime-types` automatically when a workflow uses this node.
 
-## 📤 HTTP Request Multipart
+## 📤 HTTP Request
 
 `HTTP Request` supports multipart text fields and n8n binary-file fields for `POST`, `PUT`, and `PATCH`. Binary fields read inline base64 data from the selected binary property and preserve file name and MIME type; the runtime removes manual `content-type` and `content-length` headers so `FormData` computes the boundary automatically.
 
+Set the response format to **File** to save the response in the configured binary property (default `data`) alongside the input JSON. With **Include Response Headers and Status**, the JSON output contains `headers`, `statusCode`, and `statusMessage`. The body is available in the binary field.
+
 With `Send Headers` enabled, `specifyHeaders: 'json'` accepts either a JSON string or an object of header names and values.
 
+HTTP requests treat non-2xx statuses as errors by default. Enable **Never Error** to process the response body regardless of the status.
+
+**Timeout** sets how long the HTTP node waits for the initial response in milliseconds. It defaults to 300,000 ms. The timer stops when the response headers arrive.
+
 ---
+
+## Retry On Fail
+
+HTTP Request and S3 Download replay the entire input batch when **Retry On Fail** is enabled. The default is three attempts with one second between attempts. HTTP Request waits for all requests in the current batch to settle before starting the next attempt.
 
 ## 📚 Architecture Guides & Deep Dives
 

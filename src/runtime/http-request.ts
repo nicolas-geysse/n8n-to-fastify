@@ -1,6 +1,42 @@
 import type { N8nItem } from './n8n-helper';
+import { posix } from 'node:path';
+import { createBinaryData } from './binary-data';
 
 type RequestFormPart = { name: string } & ({ value: string } | { binaryProperty: string });
+
+export function createResponseTimeout(timeout: unknown) {
+  // Environment variables evaluate to strings before reaching the timeout helper.
+  const numericTimeout = typeof timeout === 'string' && timeout.trim() ? Number(timeout) : timeout;
+  const milliseconds = numericTimeout == null || numericTimeout === 0 ? 300_000 : numericTimeout;
+  if (typeof milliseconds !== 'number' || !Number.isInteger(milliseconds) ||
+      milliseconds < 0 || milliseconds > 2_147_483_647) {
+    throw new Error('HTTP Request timeout must be a non-negative integer in milliseconds within the timer range');
+  }
+
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return {
+    start() {
+      timer = setTimeout(() => {
+        controller.abort(new Error('HTTP Request timed out after ' + milliseconds + ' ms'));
+      }, milliseconds);
+      return controller.signal;
+    },
+    clear() {
+      clearTimeout(timer);
+    },
+  };
+}
+
+export function encodeJsonRequestBody(input: unknown): string {
+  try {
+    const body = JSON.stringify(typeof input === 'string' ? JSON.parse(input) : input);
+    if (body !== undefined) return body;
+  } catch {
+    // The original error may include request data.
+  }
+  throw new Error('HTTP Request JSON body must be valid JSON');
+}
 
 export function parseRequestHeaders(input: unknown): Headers {
   try {
@@ -22,6 +58,15 @@ export function parseRequestHeaders(input: unknown): Headers {
   } catch {
     throw new Error('HTTP Request JSON headers must be an object with valid header names and values');
   }
+}
+
+export async function fetchWithStatus(url: string, neverError: boolean, options: RequestInit): Promise<Response> {
+  const response = await fetch(url, options);
+  if (!response.ok && !neverError) {
+    await response.body?.cancel().catch(() => {});
+    throw new Error('HTTP Request failed with status ' + response.status);
+  }
+  return response;
 }
 
 export function createRequestForm(item: N8nItem, parts: RequestFormPart[]): FormData {
@@ -48,4 +93,38 @@ export function createRequestForm(item: N8nItem, parts: RequestFormPart[]): Form
     form.append(part.name, blob, typeof fileName === 'string' && fileName ? fileName : 'file');
   }
   return form;
+}
+
+export async function readFileResponse(
+  response: Response,
+  requestUrl: string,
+  item: N8nItem,
+  outputProperty: string,
+  index: number,
+  includeResponseMetadata = false,
+): Promise<N8nItem> {
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  const mimeType = response.headers.get('content-type')?.split(';', 1)[0].trim() || 'application/octet-stream';
+  const binary = createBinaryData(bytes, '', mimeType);
+  const extension = binary.fileExtension;
+  const urlFileName = new URL(requestUrl).pathname.split('/').at(-1) || undefined;
+  // A custom MIME type can still carry a useful filename in the URL.
+  const fileName = extension && !urlFileName?.endsWith('.' + extension)
+    ? `${outputProperty}.${extension}`
+    : urlFileName;
+  const fileExtension = extension ?? (fileName && (posix.extname(fileName).slice(1) || undefined));
+
+  let json = item.json;
+  if (includeResponseMetadata) {
+    const headers = Object.fromEntries<string | string[]>(response.headers);
+    const cookies = response.headers.getSetCookie();
+    if (cookies.length > 0) headers['set-cookie'] = cookies;
+    json = { headers, statusCode: response.status, statusMessage: response.statusText };
+  }
+
+  return {
+    json,
+    binary: { ...item.binary, [outputProperty]: { ...binary, fileName, fileExtension } },
+    pairedItem: { item: index },
+  };
 }

@@ -18,13 +18,14 @@ test('strict compile reports known incompatibilities before writing output', () 
         {
           name: 'Legacy Code',
           type: 'n8n-nodes-base.code',
+          retryOnFail: true,
           continueOnFail: true,
           parameters: { jsCode: 'throw new Error("fixture error");' },
         },
         {
           name: 'Request',
           type: 'n8n-nodes-base.httpRequest',
-          onError: 'continueRegularOutput',
+          onError: 'continueErrorOutput',
           parameters: {
             sendBody: true, contentType: 'raw',
             sendHeaders: true, specifyHeaders: 'json',
@@ -48,6 +49,7 @@ test('strict compile reports known incompatibilities before writing output', () 
     expect(diagnostics).toContain('only JSON and multipart request bodies are supported');
     expect(diagnostics).toContain('the configured onError behavior is ignored');
     expect(diagnostics).toContain('node "Legacy Code": legacy continueOnFail is ignored');
+    expect(diagnostics).toContain('node "Legacy Code": Retry On Fail is only supported for HTTP Request and S3 Download');
     expect(diagnostics).toContain('Edit Fields JSON Output requires node version 3.4');
     expect(diagnostics).toContain('combine mode reads at most two inputs');
     expect(diagnostics).not.toContain('node "Note"');

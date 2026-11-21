@@ -1,16 +1,18 @@
 import { N8nNode } from '../parser';
 import { ExpressionParser } from '../expression-parser';
 import { isPositionMerge, mapPositionMerge } from './position-merge';
-import { getLegacyNodeReferenceIssue, usesCodeNodeLookups } from './code-context';
+import { getCodeItemMatchingIssue, getLegacyNodeReferenceIssue, isCodeNode, usesCodeItemMatching, usesCodeNodeLookups } from './code-context';
 import { continuesCodeOnRegularOutput } from './code-errors';
 import { getRawEditFieldsIssue, isRawEditFields, mapRawEditFields } from './raw-edit-fields';
 import { mapRabbitMqPublisher, rabbitMqPublisherType } from './rabbitmq';
 import { mapS3Download, s3NodeType } from './s3';
 import { compressionNodeType, mapCompression } from './compression';
 import { convertToFileType, mapConvertToFile } from './convert-to-file';
+import { extractFromFileType, mapExtractFromFile } from './extract-from-file';
 import { mapWaitInterval, waitNodeType } from './wait-interval';
 import { mapStopAndError, stopAndErrorType } from './stop-and-error';
-import { generateMultipartBody, getMultipartIssue, usesJsonHeaders, usesMultipartBody } from './http-request';
+import { usesNodeRetry, withNodeRetry } from './node-retry';
+import { continuesHttpOnErrorOutput, continuesHttpOnRegularOutput, generateMultipartBody, getMultipartIssue, usesFileResponse, usesJsonHeaders, usesMultipartBody } from './http-request';
 
 export interface NodeMapperContext {
   node: N8nNode;
@@ -40,6 +42,10 @@ export class NodeMappers {
       return mapConvertToFile(ctx);
     }
 
+    if (type === extractFromFileType) {
+      return mapExtractFromFile(ctx);
+    }
+
     if (type === compressionNodeType) {
       return mapCompression(ctx);
     }
@@ -48,7 +54,7 @@ export class NodeMappers {
       return this.mapRespondToWebhookNode(ctx);
     }
 
-    if (type.includes('code') || type.includes('function')) {
+    if (isCodeNode(ctx.node)) {
       return this.mapCodeNode(ctx);
     }
 
@@ -105,6 +111,10 @@ export class NodeMappers {
       return mapWaitInterval(ctx);
     }
 
+    if (type === 'n8n-nodes-base.noOp') {
+      return this.mapGenericNode(ctx, 'No Operation');
+    }
+
     return this.mapGenericNode(ctx, `Unmapped Node (${type})`);
   }
 
@@ -138,7 +148,7 @@ export class NodeMappers {
   }
 
   private static mapCodeNode(ctx: NodeMapperContext): string {
-    const issue = getLegacyNodeReferenceIssue(ctx.node);
+    const issue = getLegacyNodeReferenceIssue(ctx.node) ?? getCodeItemMatchingIssue(ctx.node);
     if (issue) throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
 
     const params = ctx.node.parameters || {};
@@ -148,15 +158,22 @@ export class NodeMappers {
       ? `      const $node = createLegacyNodeReferences(ctx, workflowNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});\n`
       : '';
 
-    const nodeLookupBinding = usesCodeNodeLookups(ctx.node) ? `      const $ = (name: string) => {
+    const itemMatching = usesCodeItemMatching(ctx.node);
+    const nodeLookupBinding = (usesCodeNodeLookups(ctx.node) || itemMatching) ? `      const $ = (name: string) => {
         if (!workflowNodeNames.has(name)) throw new Error("Referenced node doesn't exist");
         const target = ctx.getNode(name);
         return {
           first: () => target.first() ?? { json: {} },
           item: target.item ?? { json: {} },
-          all: target.all,
+          all: target.all,${itemMatching ? `\n          itemMatching: (index: number) => ctx.getLinkedItem(name, currentItems, index),` : ''}
         };
       };\n` : '';
+
+    const legacyItemsBinding = /\$items\b/.test(rawCode)
+      ? `      const $items = (nodeName?: string, outputIndex = 0, runIndex = -1) => nodeName === undefined
+        ? currentItems
+        : ctx.getNodeRunItems(nodeName, outputIndex, runIndex);\n`
+      : '';
 
     // Rewrite n8n sandbox globals to local runtime bindings
     const transformedCode = rawCode
@@ -166,10 +183,17 @@ export class NodeMappers {
       .replace(/\$json/g, '(currentItems[0]?.json || {})')
       .replace(/\$now/g, 'DateTime.now()');
 
+    const inputBinding = /\$input\b/.test(rawCode) ? `      const $input = {
+        all: () => currentItems,
+        first: () => currentItems[0] ?? { json: {} },
+        get item() { return currentItems[0] ?? { json: {} }; },
+      };\n` : '';
+    const itemsBinding = /\bitems\b/.test(rawCode) ? '      const items = currentItems;\n' : '';
+    // Bind the sandbox receiver so direct and detached helper calls both work.
     const runCode = `
-      const result = await (async () => {
+${legacyItemsBinding}      const result = await (async function (this: { helpers: { httpRequest: typeof codeHttpRequest } }) {
         ${transformedCode}
-      })();
+      }).call({ helpers: { httpRequest: codeHttpRequest } });
       return n8n.normalizeItems(result);`;
     // Keep the user's code indentation unchanged, including multiline template literals.
     const execution = continuesCodeOnRegularOutput(ctx.node)
@@ -184,7 +208,7 @@ export class NodeMappers {
     // [Node: ${ctx.node.name}] Code Execution
     ${ctx.variableName} = await (async () => {
       const currentItems = ${prevVar} || inputItems;
-${legacyBinding}${nodeLookupBinding}${execution}
+${legacyBinding}${nodeLookupBinding}${inputBinding}${itemsBinding}${execution}
     })();
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
@@ -209,15 +233,16 @@ ${legacyBinding}${nodeLookupBinding}${execution}
   private static mapSetNode(ctx: NodeMapperContext): string {
     const params = ctx.node.parameters || {};
     const prevVar = ctx.previousVariableName || 'inputItems';
-    const keepOnlySet = params.options?.keepOnlySet === true || params.include === 'none';
     const version = ctx.node.typeVersion ?? 3.4;
     const options = params.options ?? {};
+    const include = ExpressionParser.parse(params.include ?? 'all', 'source[0]', 'source');
+    const includeOtherFields = version >= 3.3
+      ? ExpressionParser.parse(params.includeOtherFields ?? false, 'source[0]', 'source')
+      : String(options.keepOnlySet !== true);
     let includeBinary: string;
     if (version >= 3.4) {
-      const includeOtherFields = ExpressionParser.parse(params.includeOtherFields ?? false);
-      const include = ExpressionParser.parse(params.include ?? 'all');
       const stripBinary = ExpressionParser.parse(options.stripBinary ?? false);
-      includeBinary = `(${includeOtherFields}) && (${include}) !== 'none' && !(${stripBinary})`;
+      includeBinary = `includeInputFields && !(${stripBinary})`;
     } else if (version >= 3) {
       includeBinary = ExpressionParser.parse(options.includeBinary ?? false);
     } else {
@@ -231,7 +256,10 @@ ${legacyBinding}${nodeLookupBinding}${execution}
       for (const a of params.assignments.assignments) {
         if (a.name) {
           const valExpr = ExpressionParser.parse(a.value);
-          assignments.push(`n8n.setNestedProperty(newJson, ${JSON.stringify(a.name)}, ${valExpr});`);
+          const value = version >= 3.2 && a.type === 'number'
+            ? `n8n.coerceNumberField(${valExpr}, Boolean(${ExpressionParser.parse(options.ignoreConversionErrors ?? false)}))`
+            : valExpr;
+          assignments.push(`n8n.setNestedProperty(newJson, ${JSON.stringify(a.name)}, ${value});`);
         }
       }
     }
@@ -253,9 +281,10 @@ ${legacyBinding}${nodeLookupBinding}${execution}
 
     return `
     // [Node: ${ctx.node.name}] Set / Edit Fields
-    ${ctx.variableName} = (${prevVar} || inputItems).map((currentItem: N8nItem) => {
+    ${ctx.variableName} = (${prevVar} || inputItems).map((currentItem: N8nItem, _index: number, source: N8nItem[]) => {
       const item = currentItem;
-      const newJson: Record<string, any> = ${keepOnlySet ? '{}' : '{ ...currentItem.json }'};
+      const includeInputFields = (${includeOtherFields}) && (${include}) !== 'none';
+      const newJson: Record<string, any> = includeInputFields ? { ...currentItem.json } : {};
       ${assignments.join('\n      ')}
       return {
         json: newJson,
@@ -443,8 +472,16 @@ ${legacyBinding}${nodeLookupBinding}${execution}
     const prevVar = ctx.previousVariableName || 'inputItems';
     const method = (params.method || 'GET').toUpperCase();
     const urlExpr = ExpressionParser.parse(params.url || '');
+    const timeout = ExpressionParser.parse(params.options?.timeout ?? 0);
     const multipart = usesMultipartBody(params);
     const jsonHeaders = usesJsonHeaders(params);
+    const legacyBinding = (index: string): string => ctx.legacyNodePorts
+      ? `const $node = createLegacyNodeReferences(ctx, workflowNodeNames, ${JSON.stringify(ctx.legacyNodePorts)}, ${index}, batch);`
+      : '';
+
+    // HTTP Request v1/v2 serialized Never Error as Ignore Response Code.
+    const legacyIgnoreError = (ctx.node.typeVersion ?? 1) < 3 ? params.options?.ignoreResponseCode : undefined;
+    const neverError = ExpressionParser.parse(params.options?.response?.response?.neverError ?? legacyIgnoreError ?? false, 'batch[0]', 'batch');
 
     let headersObj = '{}';
     if (jsonHeaders) {
@@ -463,7 +500,7 @@ ${legacyBinding}${nodeLookupBinding}${execution}
       bodySnippet = generateMultipartBody(params);
     } else if (['POST', 'PUT', 'PATCH'].includes(method)) {
       if (params.jsonBody) {
-        bodySnippet = `JSON.stringify(${ExpressionParser.parse(params.jsonBody)})`;
+        bodySnippet = `encodeJsonRequestBody(${ExpressionParser.parse(params.jsonBody)})`;
       } else if (params.bodyParameters?.parameters && Array.isArray(params.bodyParameters.parameters)) {
         const pairs = params.bodyParameters.parameters
           .filter((p: any) => p.name)
@@ -483,25 +520,50 @@ ${legacyBinding}${nodeLookupBinding}${execution}
       if (!reqHeaders.has('content-type')) reqHeaders.set('content-type', 'application/json');`;
     }
 
-    return `
-    // [Node: ${ctx.node.name}] Native HTTP Request (${method})
-    ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
-      const item = currentItem;
-      const targetUrl = ${urlExpr};
-      ${headersSnippet}
-      const reqBody = ${bodySnippet};
-      const res = await fetch(targetUrl, {
-        method: ${JSON.stringify(method)},
-        headers: reqHeaders,
-        ...(reqBody !== undefined ? { body: reqBody } : {})
-      });
-      const text = await res.text();
+    let responseSnippet = `const text = await res.text();
       let data: any;
       try { data = JSON.parse(text); } catch { data = { raw: text }; }
-      return { json: typeof data === 'object' && data !== null ? data : { data } };
-    }));
-    item = ${ctx.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+      return { json: typeof data === 'object' && data !== null ? data : { data } };`;
+    if (usesFileResponse(params)) {
+      const responseOptions = params.options.response.response;
+      const outputProperty = ExpressionParser.parse(responseOptions.outputPropertyName ?? 'data', 'batch[0]', 'batch');
+      const fullResponse = ExpressionParser.parse(responseOptions.fullResponse ?? false, 'batch[0]', 'batch');
+      responseSnippet = `const [outputProperty, includeResponseMetadata] = ((item: N8nItem) => {
+        ${legacyBinding('0')}
+        return [String(${outputProperty} ?? 'data'), Boolean(${fullResponse})] as const;
+      })(batch[0]);
+      return readFileResponse(res, targetUrl, currentItem, outputProperty, index, includeResponseMetadata);`;
+    }
+
+    const errorOutput = continuesHttpOnErrorOutput(ctx.node);
+    const continues = errorOutput || continuesHttpOnRegularOutput(ctx.node);
+    const defaultCollection = usesNodeRetry(ctx.node) ? 'settleRetryRequests' : 'Promise.all';
+    const collectItems = continues ? 'settleHttpItems' : defaultCollection;
+    const fetchMethod = continues ? 'fetchForRegularOutput' : 'fetchWithStatus';
+    const request = `${collectItems}((${prevVar} || inputItems).map(async (currentItem: N8nItem, index: number, batch: N8nItem[]) => {
+      const item = currentItem;
+      ${legacyBinding('index')}
+      const targetUrl = ${urlExpr};
+      const responseTimeout = createResponseTimeout(${timeout});
+      ${headersSnippet}
+      const reqBody = ${bodySnippet};
+      const res = await ${fetchMethod}(targetUrl, Boolean(${neverError}), {
+        method: ${JSON.stringify(method)},
+        headers: reqHeaders,
+        ...(reqBody !== undefined ? { body: reqBody } : {}),
+        signal: responseTimeout.start(),
+      }).finally(responseTimeout.clear);
+      ${responseSnippet}
+    }))`;
+    const name = JSON.stringify(ctx.node.name);
+    const storeOutput = errorOutput
+      ? `{\n      const outputs = partitionHttpErrorItems(${ctx.variableName}, ${prevVar} || inputItems);\n      ${ctx.variableName} = outputs.flat();\n      ctx.setNodeOutputs(${name}, outputs.entries(), ${ctx.variableName});\n    }`
+      : `ctx.setNodeOutput(${name}, ${ctx.variableName});`;
+    return `
+    // [Node: ${ctx.node.name}] Native HTTP Request (${method})
+    ${ctx.variableName} = await ${withNodeRetry(ctx.node, request)};
+    ${storeOutput}
+    item = ${ctx.variableName}[0] || { json: {} };`;
   }
 
   private static mapAggregateNode(ctx: NodeMapperContext): string {

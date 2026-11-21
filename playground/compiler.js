@@ -61,8 +61,9 @@
     if (typeof options !== "object" || Array.isArray(options)) {
       return "RabbitMQ Trigger needs static options";
     }
-    if (options.acknowledge !== "executionFinishesSuccessfully") {
-      return "RabbitMQ Trigger needs the executionFinishesSuccessfully acknowledgement mode";
+    const acknowledge = options.acknowledge ?? "immediately";
+    if (acknowledge !== "immediately" && acknowledge !== "executionFinishes" && acknowledge !== "executionFinishesSuccessfully") {
+      return "RabbitMQ Trigger supports immediately, executionFinishes, and executionFinishesSuccessfully acknowledgement";
     }
     if (options.contentIsBinary || options.onlyContent) {
       return "RabbitMQ Trigger supports text or parsed JSON in the message envelope";
@@ -86,6 +87,7 @@
     return {
       queue,
       bindings: bindings.map(({ exchange, routingKey }) => ({ exchange, routingKey })),
+      acknowledge: acknowledge === "immediately" && prefetch !== -1 ? "executionFinishes" : acknowledge,
       prefetch: prefetch === -1 ? undefined : prefetch,
       parseJson: options.jsonParseBody === true,
       declareQueue: options.assertQueue ? {
@@ -94,6 +96,30 @@
         exclusive: options.exclusive
       } : undefined
     };
+  }
+
+  // src/compiler/postgres-trigger.ts
+  var postgresTriggerType = "n8n-nodes-base.postgresTrigger";
+  function getPostgresTriggers(workflow) {
+    return workflow.nodes.filter((node) => node.type === postgresTriggerType && !node.disabled);
+  }
+  function parsePostgresTrigger(node) {
+    if ((node.typeVersion ?? 1) !== 1)
+      return "Postgres Trigger needs typeVersion 1";
+    const { triggerMode, channelName, options = {} } = node.parameters ?? {};
+    if (triggerMode !== "listenTrigger")
+      return "Postgres Trigger supports only Listen to Channel mode";
+    if (typeof channelName !== "string" || !/^[A-Za-z_][A-Za-z0-9_]{0,62}$/.test(channelName)) {
+      return "Postgres Trigger needs a static channel name of up to 63 letters, digits or underscores";
+    }
+    if (!options || typeof options !== "object" || Array.isArray(options) || Object.keys(options).some((key) => key !== "connectionTimeout" && key !== "delayClosingIdleConnection") || (options.delayClosingIdleConnection ?? 0) !== 0) {
+      return "Postgres Trigger supports only the connection timeout option";
+    }
+    const seconds = options.connectionTimeout ?? 30;
+    if (!Number.isInteger(seconds) || seconds < 1 || seconds > 2147483) {
+      return "Postgres Trigger needs a positive connection timeout in seconds within the timer range";
+    }
+    return { channel: channelName.toLowerCase(), connectionTimeoutMillis: seconds * 1000 };
   }
 
   // src/compiler/polling-loops.ts
@@ -155,7 +181,7 @@
     }
     return result;
   }
-  function findPollingLoops(nodes, connections) {
+  function findPollingLoops(nodes, connections, canvasOrder = false) {
     const byName = new Map(nodes.map((node) => [node.name, node]));
     const edges = readMainEdges(byName, connections);
     const outgoing = new Map;
@@ -169,9 +195,9 @@
       incoming.get(edge.target).push(edge);
     }
     return cyclicComponents(byName.keys(), outgoing).map((component) => {
-      const loop = planLoop(component, byName, outgoing, incoming);
+      const loop = planLoop(component, byName, outgoing, incoming) ?? (canvasOrder ? planMultiReturnLoop(component, byName, outgoing, incoming) : undefined);
       if (!loop) {
-        throw new Error("[n8n-to-fastify] Cyclic dependency detected. Only single-entry polling loops " + "with a timed Wait and one IF or Switch retry output are supported. Nodes: " + component.slice().sort().map((node) => JSON.stringify(node)).join(", "));
+        throw new Error("[n8n-to-fastify] Cyclic dependency detected. Only single-entry polling loops " + "with a timed Wait and one IF or Switch retry output, or two v1 Switch return paths, are supported. Nodes: " + component.slice().sort().map((node) => JSON.stringify(node)).join(", "));
       }
       return loop;
     });
@@ -188,6 +214,73 @@
       main[0].push({ node: target, type: "main", index: 0 });
     }
     return { nodes: nodes.filter((node) => (entries.get(node.name) ?? node.name) === node.name), connections: projected };
+  }
+  function planMultiReturnLoop(component, nodes, outgoing, incoming) {
+    const members = new Set(component);
+    const definitions = component.map((name) => nodes.get(name));
+    if (definitions.some((node) => !allowedTypes.has(node.type) || node.disabled))
+      return;
+    const switches = definitions.filter((node) => node.type === "n8n-nodes-base.switch");
+    const waits = definitions.filter((node) => node.type === waitType);
+    if (switches.length !== 1 || waits.length !== 1 || switches[0].parameters?.options?.allMatchingOutputs || (waits[0].parameters?.resume ?? "timeInterval") !== "timeInterval")
+      return;
+    const decision = switches[0].name;
+    const entries = component.flatMap((name) => (incoming.get(name) ?? []).filter((edge) => !members.has(edge.source)));
+    if (entries.length !== 1 || entries[0].input !== 0)
+      return;
+    const entry = entries[0].target;
+    const inner = new Map(component.map((name) => [name, (outgoing.get(name) ?? []).filter((edge) => members.has(edge.target))]));
+    if ([...inner.values()].some((edges) => edges.some((edge) => edge.input !== 0)))
+      return;
+    const returns = inner.get(decision);
+    if (returns.length !== 2 || returns[0].output === returns[1].output)
+      return;
+    const visited = new Set([decision]);
+    const walk = (start, end) => {
+      let name = start;
+      while (name !== end) {
+        const edges = inner.get(name);
+        if (visited.has(name) || edges?.length !== 1)
+          return false;
+        visited.add(name);
+        name = edges[0].target;
+      }
+      return true;
+    };
+    if (!walk(entry, decision) || visited.has(waits[0].name) || !returns.every((edge) => edge.target !== entry && walk(edge.target, entry)) || visited.size !== component.length)
+      return;
+    const loopExits = component.flatMap((name) => (outgoing.get(name) ?? []).filter((edge) => !members.has(edge.target)));
+    if (!loopExits.length)
+      return;
+    const region = new Set([entry, ...component]);
+    for (const name of region) {
+      for (const { target } of outgoing.get(name) ?? []) {
+        const node = nodes.get(target);
+        if (!node.disabled && (allowedTypes.has(node.type) || node.type === "n8n-nodes-base.stopAndError") && (incoming.get(target) ?? []).every((edge) => edge.input === 0 && region.has(edge.source)))
+          region.add(target);
+      }
+    }
+    const boundaryRoutes = [];
+    const routes = [];
+    for (const name of region) {
+      const edges = outgoing.get(name) ?? [];
+      const external = edges.filter((edge) => !region.has(edge.target));
+      if (external.some(({ target }) => {
+        const node = nodes.get(target);
+        return node.type === "n8n-nodes-base.stopAndError" && !node.disabled;
+      }))
+        return;
+      if (external.length)
+        boundaryRoutes.push([name, external.map(({ output, target }) => ({ output, target }))]);
+      const local = edges.filter((edge) => region.has(edge.target)).reverse().sort((a, b) => {
+        const [ax, ay] = nodes.get(a.target)?.position ?? [0, 0];
+        const [bx, by] = nodes.get(b.target)?.position ?? [0, 0];
+        return ay - by || ax - bx;
+      });
+      if (local.length)
+        routes.push([name, local.map(({ output, target }) => ({ output, target }))]);
+    }
+    return { entry, nodes: [...region], routes, boundaryRoutes };
   }
   function planLoop(component, nodes, outgoing, incoming) {
     const members = new Set(component);
@@ -286,7 +379,7 @@
       nodes.forEach((node) => {
         node.incomingConnections = incomingMap.get(node.name) || [];
       });
-      const triggers = nodes.filter((node) => node.type === rabbitMqTriggerType || node.type.includes("webhook") || node.type.includes("trigger") || node.type.includes("cron"));
+      const triggers = nodes.filter((node) => node.type === rabbitMqTriggerType || node.type === postgresTriggerType || node.type.includes("webhook") || node.type.includes("trigger") || node.type.includes("cron"));
       const triggerNames = new Set(triggers.map((t) => t.name));
       nodes.forEach((node) => {
         const ancestorTriggers = new Set;
@@ -305,11 +398,12 @@
         }
         node.ancestorTriggers = Array.from(ancestorTriggers);
       });
-      const pollingLoops = findPollingLoops(nodes, connections);
+      const useCanvasOrder = json.settings?.executionOrder === "v1";
+      const pollingLoops = findPollingLoops(nodes, connections, useCanvasOrder);
       const schedule = pollingLoops.length ? projectPollingSchedule(nodes, connections, pollingLoops) : { nodes, connections };
       const entryGroups = new Map(pollingLoops.map((loop) => [loop.entry, loop.nodes]));
       const nodeByName = new Map(nodes.map((node) => [node.name, node]));
-      const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections).flatMap((node) => entryGroups.get(node.name)?.map((name2) => nodeByName.get(name2)) ?? [node]);
+      const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections, useCanvasOrder).flatMap((node) => entryGroups.get(node.name)?.map((name2) => nodeByName.get(name2)) ?? [node]);
       return {
         id,
         name,
@@ -319,10 +413,11 @@
         connections,
         orderedNodes,
         triggers,
+        useCanvasOrder,
         pollingLoops
       };
     }
-    static topologicalSort(nodes, connections) {
+    static topologicalSort(nodes, connections, useCanvasOrder) {
       const nodeMap = new Map;
       const adjList = new Map;
       nodes.forEach((node) => {
@@ -355,6 +450,13 @@
         visiting.add(nodeName);
         pathStack.push(nodeName);
         const neighbors = adjList.get(nodeName) || [];
+        if (useCanvasOrder) {
+          neighbors.sort((a, b) => {
+            const [ax, ay] = nodeMap.get(a)?.position ?? [0, 0];
+            const [bx, by] = nodeMap.get(b)?.position ?? [0, 0];
+            return by - ay || bx - ax;
+          });
+        }
         for (const neighbor of neighbors) {
           dfs(neighbor, pathStack);
         }
@@ -386,7 +488,457 @@
     }
   }
 
+  // node_modules/js-tokens/index.js
+  var HashbangComment;
+  var Identifier;
+  var JSXIdentifier;
+  var JSXPunctuator;
+  var JSXString;
+  var JSXText;
+  var KeywordsWithExpressionAfter;
+  var KeywordsWithNoLineTerminatorAfter;
+  var LineTerminatorSequence;
+  var MultiLineComment;
+  var Newline;
+  var NumericLiteral;
+  var Punctuator;
+  var RegularExpressionLiteral;
+  var SingleLineComment;
+  var StringLiteral;
+  var Template;
+  var TokensNotPrecedingObjectLiteral;
+  var TokensPrecedingExpression;
+  var WhiteSpace;
+  var jsTokens;
+  RegularExpressionLiteral = /\/(?![*\/])(?:\[(?:[^\]\\\n\r\u2028\u2029]+|\\.)*\]?|[^\/[\\\n\r\u2028\u2029]+|\\.)*(\/[$_\u200C\u200D\p{ID_Continue}]*|\\)?/yu;
+  Punctuator = /--|\+\+|=>|\.{3}|\??\.(?!\d)|(?:&&|\|\||\?\?|[+\-%&|^]|\*{1,2}|<{1,2}|>{1,3}|!=?|={1,2}|\/(?![\/*]))=?|[?~,:;[\](){}]/y;
+  Identifier = /(\x23?)(?=[$_\p{ID_Start}\\])(?:[$_\u200C\u200D\p{ID_Continue}]+|\\u[\da-fA-F]{4}|\\u\{[\da-fA-F]+\})+/yu;
+  StringLiteral = /(['"])(?:[^'"\\\n\r]+|(?!\1)['"]|\\(?:\r\n|[^]))*(\1)?/y;
+  NumericLiteral = /(?:0[xX][\da-fA-F](?:_?[\da-fA-F])*|0[oO][0-7](?:_?[0-7])*|0[bB][01](?:_?[01])*)n?|0n|[1-9](?:_?\d)*n|(?:(?:0(?!\d)|0\d*[89]\d*|[1-9](?:_?\d)*)(?:\.(?:\d(?:_?\d)*)?)?|\.\d(?:_?\d)*)(?:[eE][+-]?\d(?:_?\d)*)?|0[0-7]+/y;
+  Template = /[`}](?:[^`\\$]+|\\[^]|\$(?!\{))*(`|\$\{)?/y;
+  WhiteSpace = /[\t\v\f\ufeff\p{Zs}]+/yu;
+  LineTerminatorSequence = /\r?\n|[\r\u2028\u2029]/y;
+  MultiLineComment = /\/\*(?:[^*]+|\*(?!\/))*(\*\/)?/y;
+  SingleLineComment = /\/\/.*/y;
+  HashbangComment = /^#!.*/;
+  JSXPunctuator = /[<>.:={}]|\/(?![\/*])/y;
+  JSXIdentifier = /[$_\p{ID_Start}][$_\u200C\u200D\p{ID_Continue}-]*/yu;
+  JSXString = /(['"])(?:[^'"]+|(?!\1)['"])*(\1)?/y;
+  JSXText = /[^<>{}]+/y;
+  TokensPrecedingExpression = /^(?:[\/+-]|\.{3}|\?(?:InterpolationIn(?:JSX|Template)|NoLineTerminatorHere|NonExpressionParenEnd|UnaryIncDec))?$|[{}([,;<>=*%&|^!~?:]$/;
+  TokensNotPrecedingObjectLiteral = /^(?:=>|[;\]){}]|else|\?(?:NoLineTerminatorHere|NonExpressionParenEnd))?$/;
+  KeywordsWithExpressionAfter = /^(?:await|case|default|delete|do|else|instanceof|new|return|throw|typeof|void|yield)$/;
+  KeywordsWithNoLineTerminatorAfter = /^(?:return|throw|yield)$/;
+  Newline = RegExp(LineTerminatorSequence.source);
+  jsTokens = function* (input, { jsx = false } = {}) {
+    var braces, firstCodePoint, isExpression, lastIndex, lastSignificantToken, length, match, mode, nextLastIndex, nextLastSignificantToken, parenNesting, postfixIncDec, punctuator, stack;
+    ({ length } = input);
+    lastIndex = 0;
+    lastSignificantToken = "";
+    stack = [
+      { tag: "JS" }
+    ];
+    braces = [];
+    parenNesting = 0;
+    postfixIncDec = false;
+    if (match = HashbangComment.exec(input)) {
+      yield {
+        type: "HashbangComment",
+        value: match[0]
+      };
+      lastIndex = match[0].length;
+    }
+    while (lastIndex < length) {
+      mode = stack[stack.length - 1];
+      switch (mode.tag) {
+        case "JS":
+        case "JSNonExpressionParen":
+        case "InterpolationInTemplate":
+        case "InterpolationInJSX":
+          if (input[lastIndex] === "/" && (TokensPrecedingExpression.test(lastSignificantToken) || KeywordsWithExpressionAfter.test(lastSignificantToken))) {
+            RegularExpressionLiteral.lastIndex = lastIndex;
+            if (match = RegularExpressionLiteral.exec(input)) {
+              lastIndex = RegularExpressionLiteral.lastIndex;
+              lastSignificantToken = match[0];
+              postfixIncDec = true;
+              yield {
+                type: "RegularExpressionLiteral",
+                value: match[0],
+                closed: match[1] !== undefined && match[1] !== "\\"
+              };
+              continue;
+            }
+          }
+          Punctuator.lastIndex = lastIndex;
+          if (match = Punctuator.exec(input)) {
+            punctuator = match[0];
+            nextLastIndex = Punctuator.lastIndex;
+            nextLastSignificantToken = punctuator;
+            switch (punctuator) {
+              case "(":
+                if (lastSignificantToken === "?NonExpressionParenKeyword") {
+                  stack.push({
+                    tag: "JSNonExpressionParen",
+                    nesting: parenNesting
+                  });
+                }
+                parenNesting++;
+                postfixIncDec = false;
+                break;
+              case ")":
+                parenNesting--;
+                postfixIncDec = true;
+                if (mode.tag === "JSNonExpressionParen" && parenNesting === mode.nesting) {
+                  stack.pop();
+                  nextLastSignificantToken = "?NonExpressionParenEnd";
+                  postfixIncDec = false;
+                }
+                break;
+              case "{":
+                Punctuator.lastIndex = 0;
+                isExpression = !TokensNotPrecedingObjectLiteral.test(lastSignificantToken) && (TokensPrecedingExpression.test(lastSignificantToken) || KeywordsWithExpressionAfter.test(lastSignificantToken));
+                braces.push(isExpression);
+                postfixIncDec = false;
+                break;
+              case "}":
+                switch (mode.tag) {
+                  case "InterpolationInTemplate":
+                    if (braces.length === mode.nesting) {
+                      Template.lastIndex = lastIndex;
+                      match = Template.exec(input);
+                      lastIndex = Template.lastIndex;
+                      lastSignificantToken = match[0];
+                      if (match[1] === "${") {
+                        lastSignificantToken = "?InterpolationInTemplate";
+                        postfixIncDec = false;
+                        yield {
+                          type: "TemplateMiddle",
+                          value: match[0]
+                        };
+                      } else {
+                        stack.pop();
+                        postfixIncDec = true;
+                        yield {
+                          type: "TemplateTail",
+                          value: match[0],
+                          closed: match[1] === "`"
+                        };
+                      }
+                      continue;
+                    }
+                    break;
+                  case "InterpolationInJSX":
+                    if (braces.length === mode.nesting) {
+                      stack.pop();
+                      lastIndex += 1;
+                      lastSignificantToken = "}";
+                      yield {
+                        type: "JSXPunctuator",
+                        value: "}"
+                      };
+                      continue;
+                    }
+                }
+                postfixIncDec = braces.pop();
+                nextLastSignificantToken = postfixIncDec ? "?ExpressionBraceEnd" : "}";
+                break;
+              case "]":
+                postfixIncDec = true;
+                break;
+              case "++":
+              case "--":
+                nextLastSignificantToken = postfixIncDec ? "?PostfixIncDec" : "?UnaryIncDec";
+                break;
+              case "<":
+                if (jsx && (TokensPrecedingExpression.test(lastSignificantToken) || KeywordsWithExpressionAfter.test(lastSignificantToken))) {
+                  stack.push({ tag: "JSXTag" });
+                  lastIndex += 1;
+                  lastSignificantToken = "<";
+                  yield {
+                    type: "JSXPunctuator",
+                    value: punctuator
+                  };
+                  continue;
+                }
+                postfixIncDec = false;
+                break;
+              default:
+                postfixIncDec = false;
+            }
+            lastIndex = nextLastIndex;
+            lastSignificantToken = nextLastSignificantToken;
+            yield {
+              type: "Punctuator",
+              value: punctuator
+            };
+            continue;
+          }
+          Identifier.lastIndex = lastIndex;
+          if (match = Identifier.exec(input)) {
+            lastIndex = Identifier.lastIndex;
+            nextLastSignificantToken = match[0];
+            switch (match[0]) {
+              case "for":
+              case "if":
+              case "while":
+              case "with":
+                if (lastSignificantToken !== "." && lastSignificantToken !== "?.") {
+                  nextLastSignificantToken = "?NonExpressionParenKeyword";
+                }
+            }
+            lastSignificantToken = nextLastSignificantToken;
+            postfixIncDec = !KeywordsWithExpressionAfter.test(match[0]);
+            yield {
+              type: match[1] === "#" ? "PrivateIdentifier" : "IdentifierName",
+              value: match[0]
+            };
+            continue;
+          }
+          StringLiteral.lastIndex = lastIndex;
+          if (match = StringLiteral.exec(input)) {
+            lastIndex = StringLiteral.lastIndex;
+            lastSignificantToken = match[0];
+            postfixIncDec = true;
+            yield {
+              type: "StringLiteral",
+              value: match[0],
+              closed: match[2] !== undefined
+            };
+            continue;
+          }
+          NumericLiteral.lastIndex = lastIndex;
+          if (match = NumericLiteral.exec(input)) {
+            lastIndex = NumericLiteral.lastIndex;
+            lastSignificantToken = match[0];
+            postfixIncDec = true;
+            yield {
+              type: "NumericLiteral",
+              value: match[0]
+            };
+            continue;
+          }
+          Template.lastIndex = lastIndex;
+          if (match = Template.exec(input)) {
+            lastIndex = Template.lastIndex;
+            lastSignificantToken = match[0];
+            if (match[1] === "${") {
+              lastSignificantToken = "?InterpolationInTemplate";
+              stack.push({
+                tag: "InterpolationInTemplate",
+                nesting: braces.length
+              });
+              postfixIncDec = false;
+              yield {
+                type: "TemplateHead",
+                value: match[0]
+              };
+            } else {
+              postfixIncDec = true;
+              yield {
+                type: "NoSubstitutionTemplate",
+                value: match[0],
+                closed: match[1] === "`"
+              };
+            }
+            continue;
+          }
+          break;
+        case "JSXTag":
+        case "JSXTagEnd":
+          JSXPunctuator.lastIndex = lastIndex;
+          if (match = JSXPunctuator.exec(input)) {
+            lastIndex = JSXPunctuator.lastIndex;
+            nextLastSignificantToken = match[0];
+            switch (match[0]) {
+              case "<":
+                stack.push({ tag: "JSXTag" });
+                break;
+              case ">":
+                stack.pop();
+                if (lastSignificantToken === "/" || mode.tag === "JSXTagEnd") {
+                  nextLastSignificantToken = "?JSX";
+                  postfixIncDec = true;
+                } else {
+                  stack.push({ tag: "JSXChildren" });
+                }
+                break;
+              case "{":
+                stack.push({
+                  tag: "InterpolationInJSX",
+                  nesting: braces.length
+                });
+                nextLastSignificantToken = "?InterpolationInJSX";
+                postfixIncDec = false;
+                break;
+              case "/":
+                if (lastSignificantToken === "<") {
+                  stack.pop();
+                  if (stack[stack.length - 1].tag === "JSXChildren") {
+                    stack.pop();
+                  }
+                  stack.push({ tag: "JSXTagEnd" });
+                }
+            }
+            lastSignificantToken = nextLastSignificantToken;
+            yield {
+              type: "JSXPunctuator",
+              value: match[0]
+            };
+            continue;
+          }
+          JSXIdentifier.lastIndex = lastIndex;
+          if (match = JSXIdentifier.exec(input)) {
+            lastIndex = JSXIdentifier.lastIndex;
+            lastSignificantToken = match[0];
+            yield {
+              type: "JSXIdentifier",
+              value: match[0]
+            };
+            continue;
+          }
+          JSXString.lastIndex = lastIndex;
+          if (match = JSXString.exec(input)) {
+            lastIndex = JSXString.lastIndex;
+            lastSignificantToken = match[0];
+            yield {
+              type: "JSXString",
+              value: match[0],
+              closed: match[2] !== undefined
+            };
+            continue;
+          }
+          break;
+        case "JSXChildren":
+          JSXText.lastIndex = lastIndex;
+          if (match = JSXText.exec(input)) {
+            lastIndex = JSXText.lastIndex;
+            lastSignificantToken = match[0];
+            yield {
+              type: "JSXText",
+              value: match[0]
+            };
+            continue;
+          }
+          switch (input[lastIndex]) {
+            case "<":
+              stack.push({ tag: "JSXTag" });
+              lastIndex++;
+              lastSignificantToken = "<";
+              yield {
+                type: "JSXPunctuator",
+                value: "<"
+              };
+              continue;
+            case "{":
+              stack.push({
+                tag: "InterpolationInJSX",
+                nesting: braces.length
+              });
+              lastIndex++;
+              lastSignificantToken = "?InterpolationInJSX";
+              postfixIncDec = false;
+              yield {
+                type: "JSXPunctuator",
+                value: "{"
+              };
+              continue;
+          }
+      }
+      WhiteSpace.lastIndex = lastIndex;
+      if (match = WhiteSpace.exec(input)) {
+        lastIndex = WhiteSpace.lastIndex;
+        yield {
+          type: "WhiteSpace",
+          value: match[0]
+        };
+        continue;
+      }
+      LineTerminatorSequence.lastIndex = lastIndex;
+      if (match = LineTerminatorSequence.exec(input)) {
+        lastIndex = LineTerminatorSequence.lastIndex;
+        postfixIncDec = false;
+        if (KeywordsWithNoLineTerminatorAfter.test(lastSignificantToken)) {
+          lastSignificantToken = "?NoLineTerminatorHere";
+        }
+        yield {
+          type: "LineTerminatorSequence",
+          value: match[0]
+        };
+        continue;
+      }
+      MultiLineComment.lastIndex = lastIndex;
+      if (match = MultiLineComment.exec(input)) {
+        lastIndex = MultiLineComment.lastIndex;
+        if (Newline.test(match[0])) {
+          postfixIncDec = false;
+          if (KeywordsWithNoLineTerminatorAfter.test(lastSignificantToken)) {
+            lastSignificantToken = "?NoLineTerminatorHere";
+          }
+        }
+        yield {
+          type: "MultiLineComment",
+          value: match[0],
+          closed: match[1] !== undefined
+        };
+        continue;
+      }
+      SingleLineComment.lastIndex = lastIndex;
+      if (match = SingleLineComment.exec(input)) {
+        lastIndex = SingleLineComment.lastIndex;
+        postfixIncDec = false;
+        yield {
+          type: "SingleLineComment",
+          value: match[0]
+        };
+        continue;
+      }
+      firstCodePoint = String.fromCodePoint(input.codePointAt(lastIndex));
+      lastIndex += firstCodePoint.length;
+      lastSignificantToken = firstCodePoint;
+      postfixIncDec = false;
+      yield {
+        type: mode.tag.startsWith("JSX") ? "JSXInvalid" : "Invalid",
+        value: firstCodePoint
+      };
+    }
+    return;
+  };
+  var js_tokens_default = jsTokens;
+
   // src/compiler/expression-parser.ts
+  function rewriteBinaryReferences(code) {
+    if (!code.includes("$binary"))
+      return code;
+    const tokens = [...js_tokens_default(code)];
+    const significant = tokens.filter((token) => ![
+      "WhiteSpace",
+      "LineTerminatorSequence",
+      "SingleLineComment",
+      "MultiLineComment",
+      "HashbangComment"
+    ].includes(token.type));
+    for (const [index, token] of significant.entries()) {
+      if (token.type !== "IdentifierName" || token.value !== "$binary")
+        continue;
+      const previous = significant[index - 1]?.value;
+      const next = significant[index + 1]?.value;
+      if (previous === "." || previous === "?.")
+        continue;
+      const objectEntry = previous === "{" || previous === ",";
+      if (objectEntry && next === ":")
+        continue;
+      token.value = objectEntry && (next === "," || next === "}") ? "$binary: item?.binary" : "item?.binary";
+      let accessor = index + 1;
+      while (significant[accessor]?.value === "." && significant[accessor + 1]?.type === "IdentifierName") {
+        significant[accessor].value = "?.";
+        accessor += 2;
+      }
+      if (significant[accessor]?.value === "[")
+        significant[accessor].value = "?.[";
+    }
+    return tokens.map((token) => token.value).join("");
+  }
+
   class ExpressionParser {
     static parse(expression, firstInputItem, inputItems = "inputItems") {
       if (expression === undefined || expression === null) {
@@ -448,6 +1000,7 @@
         const parts = path.split(".").filter(Boolean);
         return `item?.json?.${parts.join("?.")}`;
       });
+      result = rewriteBinaryReferences(result);
       result = result.replace(/\$input\.first\(\)\.json/g, `${firstInputItem ?? "item"}?.json`);
       if (firstInputItem)
         result = result.replace(/\$input\.first\(\)/g, firstInputItem);
@@ -501,14 +1054,26 @@
   }
 
   // src/compiler/mappers/code-context.ts
+  function usesCodeItemMatching(node) {
+    const code = node.parameters?.jsCode;
+    return node.type === "n8n-nodes-base.code" && typeof code === "string" && /\.\s*itemMatching\b/.test(code);
+  }
+  function getCodeItemMatchingIssue(node) {
+    if (usesCodeItemMatching(node) && ((node.parameters?.language ?? "javaScript") !== "javaScript" || (node.parameters?.mode ?? "runOnceForAllItems") !== "runOnceForAllItems")) {
+      return "Code itemMatching requires JavaScript and Run Once for All Items";
+    }
+  }
+  function isCodeNode(node) {
+    return node.type.includes("code") || node.type.includes("function");
+  }
   function usesCodeNodeLookups(node) {
-    if (!node.type.includes("code") && !node.type.includes("function"))
+    if (!isCodeNode(node))
       return false;
     const code = node.parameters?.jsCode || node.parameters?.functionCode;
     return typeof code === "string" && /\$\s*\(/.test(code);
   }
   function usesLegacyNodeReferences(node) {
-    if (!node.type.includes("code") && !node.type.includes("function"))
+    if (!isCodeNode(node))
       return false;
     const code = node.parameters?.jsCode || node.parameters?.functionCode;
     return typeof code === "string" && /\$node\b/.test(code);
@@ -658,6 +1223,20 @@
     }`;
   }
 
+  // src/compiler/mappers/node-retry.ts
+  function usesNodeRetry(node) {
+    return node.retryOnFail === true && (node.type === "n8n-nodes-base.httpRequest" || node.type === "n8n-nodes-base.s3");
+  }
+  function withNodeRetry(node, operation) {
+    if (!usesNodeRetry(node))
+      return operation;
+    const maxTries = Math.min(5, Math.max(2, Math.trunc(Number(node.maxTries) || 3)));
+    const configuredDelay = node.waitBetweenTries;
+    const delayNumber = typeof configuredDelay === "string" && configuredDelay.trim() ? Number(configuredDelay) : configuredDelay;
+    const delay = typeof delayNumber === "number" && Number.isFinite(delayNumber) ? Math.min(5000, Math.max(0, Math.trunc(delayNumber))) : 1000;
+    return `runWithNodeRetry(() => ${operation}, ${maxTries}, ${delay})`;
+  }
+
   // src/compiler/mappers/s3.ts
   var s3NodeType = "n8n-nodes-base.s3";
   function getS3DownloadIssue(node) {
@@ -678,15 +1257,15 @@
     const bucket = ExpressionParser.parse(params.bucketName);
     const key = ExpressionParser.parse(params.fileKey);
     const binaryProperty = ExpressionParser.parse(params.binaryPropertyName ?? "data");
-    return `
-    {
-      const downloads = (${source} || inputItems).map((item: N8nItem) => ({
+    const download = `downloadS3Files((${source} || inputItems).map((item: N8nItem) => ({
         item,
         bucket: String(${bucket} ?? ''),
         key: String(${key} ?? ''),
         binaryProperty: String(${binaryProperty} ?? ''),
-      }));
-      ${ctx.variableName} = await downloadS3Files(downloads);
+      })))`;
+    return `
+    {
+      ${ctx.variableName} = await ${withNodeRetry(ctx.node, download)};
       item = ${ctx.variableName}[0] || { json: {} };
       ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});
     }`;
@@ -763,6 +1342,36 @@
     }
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+  }
+
+  // src/compiler/mappers/extract-from-file.ts
+  var extractFromFileType = "n8n-nodes-base.extractFromFile";
+  function getExtractFromFileIssue(node) {
+    const version = node.typeVersion ?? 1;
+    if (version !== 1 && version !== 1.1 || node.parameters?.operation !== "binaryToPropery") {
+      return "Extract From File supports Move File to Base64 String on node versions 1 and 1.1";
+    }
+  }
+  function mapExtractFromFile(ctx) {
+    const issue = getExtractFromFileIssue(ctx.node);
+    if (issue)
+      throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
+    const params = ctx.node.parameters ?? {};
+    const parse = (value) => ExpressionParser.parse(value, "source[0]", "source");
+    const binaryProperty = parse(params.binaryPropertyName ?? "data");
+    const destination = parse(params.destinationKey ?? "data");
+    const keepSource = parse(params.options?.keepSource ?? "");
+    return `
+    {
+      const source: N8nItem[] = ${ctx.previousVariableName ?? "inputItems"} || inputItems;
+      ${ctx.variableName} = extractBase64Items(source, item => ({
+        keepSource: ${keepSource},
+        binaryProperty: String(${binaryProperty} ?? ''),
+        get destination() { return String(${destination} ?? ''); },
+      }));
+      item = ${ctx.variableName}[0] || { json: {} };
+      ctx.setNodeOutputs(${JSON.stringify(ctx.node.name)}, [[0, ${ctx.variableName}]], ${ctx.variableName});
+    }`;
   }
 
   // src/runtime/wait-interval.ts
@@ -858,8 +1467,20 @@
   }
 
   // src/compiler/mappers/http-request.ts
+  function continuesHttpOnErrorOutput(node) {
+    return node.type === "n8n-nodes-base.httpRequest" && node.typeVersion === 4.2 && node.onError === "continueErrorOutput";
+  }
+  function continuesHttpOnRegularOutput(node) {
+    return node.type === "n8n-nodes-base.httpRequest" && node.onError === "continueRegularOutput";
+  }
+  function usesHttpLegacyNodeReferences(node) {
+    return node.type === "n8n-nodes-base.httpRequest" && /\$node\b/.test(JSON.stringify(node.parameters ?? {}));
+  }
   function usesMultipartBody(params) {
     return params?.sendBody === true && params.contentType === "multipart-form-data";
+  }
+  function usesFileResponse(params) {
+    return params?.options?.response?.response?.responseFormat === "file";
   }
   function usesJsonHeaders(params) {
     return params?.sendHeaders === true && params.specifyHeaders === "json";
@@ -910,13 +1531,16 @@
       if (type === convertToFileType) {
         return mapConvertToFile(ctx);
       }
+      if (type === extractFromFileType) {
+        return mapExtractFromFile(ctx);
+      }
       if (type === compressionNodeType) {
         return mapCompression(ctx);
       }
       if (type.includes("respondToWebhook")) {
         return this.mapRespondToWebhookNode(ctx);
       }
-      if (type.includes("code") || type.includes("function")) {
+      if (isCodeNode(ctx.node)) {
         return this.mapCodeNode(ctx);
       }
       if (type.includes("executeWorkflowTrigger")) {
@@ -960,6 +1584,9 @@
       if (type === waitNodeType) {
         return mapWaitInterval(ctx);
       }
+      if (type === "n8n-nodes-base.noOp") {
+        return this.mapGenericNode(ctx, "No Operation");
+      }
       return this.mapGenericNode(ctx, `Unmapped Node (${type})`);
     }
     static mapRespondToWebhookNode(ctx) {
@@ -989,7 +1616,7 @@
     }`;
     }
     static mapCodeNode(ctx) {
-      const issue = getLegacyNodeReferenceIssue(ctx.node);
+      const issue = getLegacyNodeReferenceIssue(ctx.node) ?? getCodeItemMatchingIssue(ctx.node);
       if (issue)
         throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
       const params = ctx.node.parameters || {};
@@ -997,21 +1624,35 @@
       const prevVar = ctx.previousVariableName || "inputItems";
       const legacyBinding = ctx.legacyNodePorts ? `      const $node = createLegacyNodeReferences(ctx, workflowNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});
 ` : "";
-      const nodeLookupBinding = usesCodeNodeLookups(ctx.node) ? `      const $ = (name: string) => {
+      const itemMatching = usesCodeItemMatching(ctx.node);
+      const nodeLookupBinding = usesCodeNodeLookups(ctx.node) || itemMatching ? `      const $ = (name: string) => {
         if (!workflowNodeNames.has(name)) throw new Error("Referenced node doesn't exist");
         const target = ctx.getNode(name);
         return {
           first: () => target.first() ?? { json: {} },
           item: target.item ?? { json: {} },
-          all: target.all,
+          all: target.all,${itemMatching ? `
+          itemMatching: (index: number) => ctx.getLinkedItem(name, currentItems, index),` : ""}
         };
       };
 ` : "";
+      const legacyItemsBinding = /\$items\b/.test(rawCode) ? `      const $items = (nodeName?: string, outputIndex = 0, runIndex = -1) => nodeName === undefined
+        ? currentItems
+        : ctx.getNodeRunItems(nodeName, outputIndex, runIndex);
+` : "";
       const transformedCode = rawCode.replace(/\$input\.all\(\)/g, "currentItems").replace(/\$input\.first\(\)/g, "(currentItems[0] || { json: {} })").replace(/\$input\.item/g, "(currentItems[0] || { json: {} })").replace(/\$json/g, "(currentItems[0]?.json || {})").replace(/\$now/g, "DateTime.now()");
+      const inputBinding = /\$input\b/.test(rawCode) ? `      const $input = {
+        all: () => currentItems,
+        first: () => currentItems[0] ?? { json: {} },
+        get item() { return currentItems[0] ?? { json: {} }; },
+      };
+` : "";
+      const itemsBinding = /\bitems\b/.test(rawCode) ? `      const items = currentItems;
+` : "";
       const runCode = `
-      const result = await (async () => {
+${legacyItemsBinding}      const result = await (async function (this: { helpers: { httpRequest: typeof codeHttpRequest } }) {
         ${transformedCode}
-      })();
+      }).call({ helpers: { httpRequest: codeHttpRequest } });
       return n8n.normalizeItems(result);`;
       const execution = continuesCodeOnRegularOutput(ctx.node) ? `
       try {${runCode}
@@ -1022,7 +1663,7 @@
     // [Node: ${ctx.node.name}] Code Execution
     ${ctx.variableName} = await (async () => {
       const currentItems = ${prevVar} || inputItems;
-${legacyBinding}${nodeLookupBinding}${execution}
+${legacyBinding}${nodeLookupBinding}${inputBinding}${itemsBinding}${execution}
     })();
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
@@ -1040,15 +1681,14 @@ ${legacyBinding}${nodeLookupBinding}${execution}
     static mapSetNode(ctx) {
       const params = ctx.node.parameters || {};
       const prevVar = ctx.previousVariableName || "inputItems";
-      const keepOnlySet = params.options?.keepOnlySet === true || params.include === "none";
       const version = ctx.node.typeVersion ?? 3.4;
       const options = params.options ?? {};
+      const include = ExpressionParser.parse(params.include ?? "all", "source[0]", "source");
+      const includeOtherFields = version >= 3.3 ? ExpressionParser.parse(params.includeOtherFields ?? false, "source[0]", "source") : String(options.keepOnlySet !== true);
       let includeBinary;
       if (version >= 3.4) {
-        const includeOtherFields = ExpressionParser.parse(params.includeOtherFields ?? false);
-        const include = ExpressionParser.parse(params.include ?? "all");
         const stripBinary = ExpressionParser.parse(options.stripBinary ?? false);
-        includeBinary = `(${includeOtherFields}) && (${include}) !== 'none' && !(${stripBinary})`;
+        includeBinary = `includeInputFields && !(${stripBinary})`;
       } else if (version >= 3) {
         includeBinary = ExpressionParser.parse(options.includeBinary ?? false);
       } else {
@@ -1059,7 +1699,8 @@ ${legacyBinding}${nodeLookupBinding}${execution}
         for (const a of params.assignments.assignments) {
           if (a.name) {
             const valExpr = ExpressionParser.parse(a.value);
-            assignments.push(`n8n.setNestedProperty(newJson, ${JSON.stringify(a.name)}, ${valExpr});`);
+            const value = version >= 3.2 && a.type === "number" ? `n8n.coerceNumberField(${valExpr}, Boolean(${ExpressionParser.parse(options.ignoreConversionErrors ?? false)}))` : valExpr;
+            assignments.push(`n8n.setNestedProperty(newJson, ${JSON.stringify(a.name)}, ${value});`);
           }
         }
       }
@@ -1078,9 +1719,10 @@ ${legacyBinding}${nodeLookupBinding}${execution}
       }
       return `
     // [Node: ${ctx.node.name}] Set / Edit Fields
-    ${ctx.variableName} = (${prevVar} || inputItems).map((currentItem: N8nItem) => {
+    ${ctx.variableName} = (${prevVar} || inputItems).map((currentItem: N8nItem, _index: number, source: N8nItem[]) => {
       const item = currentItem;
-      const newJson: Record<string, any> = ${keepOnlySet ? "{}" : "{ ...currentItem.json }"};
+      const includeInputFields = (${includeOtherFields}) && (${include}) !== 'none';
+      const newJson: Record<string, any> = includeInputFields ? { ...currentItem.json } : {};
       ${assignments.join(`
       `)}
       return {
@@ -1253,8 +1895,12 @@ ${legacyBinding}${nodeLookupBinding}${execution}
       const prevVar = ctx.previousVariableName || "inputItems";
       const method = (params.method || "GET").toUpperCase();
       const urlExpr = ExpressionParser.parse(params.url || "");
+      const timeout = ExpressionParser.parse(params.options?.timeout ?? 0);
       const multipart = usesMultipartBody(params);
       const jsonHeaders = usesJsonHeaders(params);
+      const legacyBinding = (index) => ctx.legacyNodePorts ? `const $node = createLegacyNodeReferences(ctx, workflowNodeNames, ${JSON.stringify(ctx.legacyNodePorts)}, ${index}, batch);` : "";
+      const legacyIgnoreError = (ctx.node.typeVersion ?? 1) < 3 ? params.options?.ignoreResponseCode : undefined;
+      const neverError = ExpressionParser.parse(params.options?.response?.response?.neverError ?? legacyIgnoreError ?? false, "batch[0]", "batch");
       let headersObj = "{}";
       if (jsonHeaders) {
         headersObj = `parseRequestHeaders(${ExpressionParser.parse(params.jsonHeaders ?? "{}")})`;
@@ -1270,7 +1916,7 @@ ${legacyBinding}${nodeLookupBinding}${execution}
         bodySnippet = generateMultipartBody(params);
       } else if (["POST", "PUT", "PATCH"].includes(method)) {
         if (params.jsonBody) {
-          bodySnippet = `JSON.stringify(${ExpressionParser.parse(params.jsonBody)})`;
+          bodySnippet = `encodeJsonRequestBody(${ExpressionParser.parse(params.jsonBody)})`;
         } else if (params.bodyParameters?.parameters && Array.isArray(params.bodyParameters.parameters)) {
           const pairs = params.bodyParameters.parameters.filter((p) => p.name).map((p) => `${JSON.stringify(p.name)}: ${ExpressionParser.parse(p.value)}`);
           bodySnippet = `JSON.stringify({ ${pairs.join(", ")} })`;
@@ -1286,25 +1932,51 @@ ${legacyBinding}${nodeLookupBinding}${execution}
         headersSnippet = `const reqHeaders = ${headersObj};
       if (!reqHeaders.has('content-type')) reqHeaders.set('content-type', 'application/json');`;
       }
-      return `
-    // [Node: ${ctx.node.name}] Native HTTP Request (${method})
-    ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
-      const item = currentItem;
-      const targetUrl = ${urlExpr};
-      ${headersSnippet}
-      const reqBody = ${bodySnippet};
-      const res = await fetch(targetUrl, {
-        method: ${JSON.stringify(method)},
-        headers: reqHeaders,
-        ...(reqBody !== undefined ? { body: reqBody } : {})
-      });
-      const text = await res.text();
+      let responseSnippet = `const text = await res.text();
       let data: any;
       try { data = JSON.parse(text); } catch { data = { raw: text }; }
-      return { json: typeof data === 'object' && data !== null ? data : { data } };
-    }));
-    item = ${ctx.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+      return { json: typeof data === 'object' && data !== null ? data : { data } };`;
+      if (usesFileResponse(params)) {
+        const responseOptions = params.options.response.response;
+        const outputProperty = ExpressionParser.parse(responseOptions.outputPropertyName ?? "data", "batch[0]", "batch");
+        const fullResponse = ExpressionParser.parse(responseOptions.fullResponse ?? false, "batch[0]", "batch");
+        responseSnippet = `const [outputProperty, includeResponseMetadata] = ((item: N8nItem) => {
+        ${legacyBinding("0")}
+        return [String(${outputProperty} ?? 'data'), Boolean(${fullResponse})] as const;
+      })(batch[0]);
+      return readFileResponse(res, targetUrl, currentItem, outputProperty, index, includeResponseMetadata);`;
+      }
+      const errorOutput = continuesHttpOnErrorOutput(ctx.node);
+      const continues = errorOutput || continuesHttpOnRegularOutput(ctx.node);
+      const defaultCollection = usesNodeRetry(ctx.node) ? "settleRetryRequests" : "Promise.all";
+      const collectItems = continues ? "settleHttpItems" : defaultCollection;
+      const fetchMethod = continues ? "fetchForRegularOutput" : "fetchWithStatus";
+      const request = `${collectItems}((${prevVar} || inputItems).map(async (currentItem: N8nItem, index: number, batch: N8nItem[]) => {
+      const item = currentItem;
+      ${legacyBinding("index")}
+      const targetUrl = ${urlExpr};
+      const responseTimeout = createResponseTimeout(${timeout});
+      ${headersSnippet}
+      const reqBody = ${bodySnippet};
+      const res = await ${fetchMethod}(targetUrl, Boolean(${neverError}), {
+        method: ${JSON.stringify(method)},
+        headers: reqHeaders,
+        ...(reqBody !== undefined ? { body: reqBody } : {}),
+        signal: responseTimeout.start(),
+      }).finally(responseTimeout.clear);
+      ${responseSnippet}
+    }))`;
+      const name = JSON.stringify(ctx.node.name);
+      const storeOutput = errorOutput ? `{
+      const outputs = partitionHttpErrorItems(${ctx.variableName}, ${prevVar} || inputItems);
+      ${ctx.variableName} = outputs.flat();
+      ctx.setNodeOutputs(${name}, outputs.entries(), ${ctx.variableName});
+    }` : `ctx.setNodeOutput(${name}, ${ctx.variableName});`;
+      return `
+    // [Node: ${ctx.node.name}] Native HTTP Request (${method})
+    ${ctx.variableName} = await ${withNodeRetry(ctx.node, request)};
+    ${storeOutput}
+    item = ${ctx.variableName}[0] || { json: {} };`;
     }
     static mapAggregateNode(ctx) {
       const params = ctx.node.parameters || {};
@@ -1438,7 +2110,63 @@ ${legacyBinding}${nodeLookupBinding}${execution}
     }
   }
 
+  // src/compiler/community-adapters.ts
+  function selectCommunityAdapters(workflow, adapters) {
+    const selected = new Map;
+    for (const node of workflow.nodes) {
+      if (node.disabled || workflow.triggers.includes(node))
+        continue;
+      const adapter = adapters.find((entry) => entry.type === node.type && entry.typeVersion === node.typeVersion);
+      if (adapter)
+        selected.set(node, adapter);
+    }
+    return selected;
+  }
+  function mapCommunityNode(node, adapter, output, input) {
+    const metadata = JSON.stringify({
+      id: node.id,
+      name: node.name,
+      type: node.type,
+      typeVersion: node.typeVersion,
+      retryOnFail: node.retryOnFail === true,
+      maxTries: node.maxTries,
+      waitBetweenTries: node.waitBetweenTries
+    });
+    const entries = adapter.parameters.filter((name) => Object.hasOwn(node.parameters ?? {}, name)).map((name) => {
+      const value = node.parameters[name];
+      const expression = value === null ? "null" : ExpressionParser.parse(value, "adapterItems[0]", "adapterItems");
+      return `[${JSON.stringify(name)}]: ${expression}`;
+    });
+    return `{
+    const adapterItems: N8nItem[] = ${input} || inputItems;
+    const parameters = (index = 0) => {
+      const item = adapterItems[index] ?? { json: {} };
+      return { ${entries.join(", ")} };
+    };
+    ${output} = await executeCommunityAdapter(${adapter.binding}, { node: ${metadata}, items: adapterItems, parameters });
+    item = ${output}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${output});
+  }`;
+  }
+
   // src/compiler/polling-code.ts
+  function emitMultiReturnPollingLoop(loop, nodes, mapNode, wrapNode) {
+    const { nodes: members, ...plan } = loop;
+    const entry = nodes.get(plan.entry);
+    const initial = entry.incomingConnections.find((connection) => !members.includes(connection.sourceNode));
+    const inputBatches = `ctx.getNodeOutputBatches(${JSON.stringify(initial.sourceNode)}, ${initial.outputIndex})`;
+    const steps = members.map((name) => {
+      const node = nodes.get(name);
+      const code = wrapNode(node, "true", mapNode(node, "pollingItems"));
+      return `    [${JSON.stringify(name)}, async (pollingItems) => {
+${code}    }]`;
+    });
+    return `  await ctx.runMultiReturnPollingLoop(${JSON.stringify(plan)}, ${inputBatches}, [
+${steps.join(`,
+`)}
+  ]);
+`;
+  }
   function emitPollingLoop(loop, nodes, mapNode, wrapNode) {
     const { entry, terminalExits, repeatPort, ...runtimePlan } = loop;
     const entryNode = nodes.get(entry);
@@ -1508,25 +2236,167 @@ ${legacyBinding}${nodeLookupBinding}${execution}
       return "skip";
   }
 
+  // src/compiler/mappers/linked-llm.ts
+  var prefix = "@n8n/n8n-nodes-langchain.";
+  var chainType = prefix + "chainLlm";
+  var connectionType = "ai_languageModel";
+  var modelTypes = new Map([
+    [prefix + "lmChatGroq", { transport: "chat-completions", options: { temperature: "temperature", maxTokensToSample: "max_tokens" } }],
+    [prefix + "lmChatOllama", { transport: "ollama", options: { temperature: "temperature", topK: "top_k", topP: "top_p", numPredict: "num_predict" } }]
+  ]);
+  var roles = new Map([
+    ["SystemMessagePromptTemplate", "system"],
+    ["HumanMessagePromptTemplate", "user"],
+    ["AIMessagePromptTemplate", "assistant"]
+  ]);
+  function readModel(node) {
+    const definition = modelTypes.get(node.type);
+    const params = node.parameters ?? {};
+    const options = params.options ?? {};
+    if (!definition || node.typeVersion !== 1 || node.disabled || !node.id || typeof params.model !== "string" || !params.model.trim() || typeof options !== "object" || Array.isArray(options))
+      return;
+    const entries = [];
+    for (const [key, value] of Object.entries(options)) {
+      if (!Object.hasOwn(definition.options, key) || typeof value !== "number" && !(typeof value === "string" && value.startsWith("=")))
+        return;
+      entries.push([definition.options[key], value]);
+    }
+    return { id: node.id, transport: definition.transport, model: params.model, options: entries };
+  }
+  function supportsChain(node) {
+    const params = node.parameters ?? {};
+    const messages = params.messages?.messageValues ?? [];
+    return node.typeVersion === 1.7 && params.promptType === "define" && typeof params.text === "string" && !params.hasOutputParser && (params.needsFallback === undefined || typeof params.needsFallback === "boolean") && Array.isArray(messages) && messages.every((message) => message && roles.has(message.type ?? "SystemMessagePromptTemplate") && (message.messageType ?? "text") === "text" && typeof message.message === "string");
+  }
+  function planLanguageModels(workflow) {
+    const nodes = new Map(workflow.nodes.map((node) => [node.name, node]));
+    const modelSubnodes = new Set(workflow.nodes.filter((node) => {
+      const main = workflow.connections[node.name]?.main;
+      return modelTypes.has(node.type) && !node.incomingConnections?.length && (main === undefined || Array.isArray(main) && !main.some((port) => port?.length));
+    }));
+    const inputs = new Map;
+    const invalid = new Set;
+    const issues = [];
+    for (const [source, outputs] of Object.entries(workflow.connections)) {
+      if (!outputs || !Object.hasOwn(outputs, connectionType))
+        continue;
+      const ports = outputs[connectionType];
+      if (!Array.isArray(ports)) {
+        issues.push([source, "invalid language model connection"]);
+        continue;
+      }
+      for (const [port, edges] of ports.entries()) {
+        if (edges == null)
+          continue;
+        if (!Array.isArray(edges)) {
+          issues.push([source, "invalid language model connection"]);
+          continue;
+        }
+        for (const edge of edges) {
+          const target = nodes.get(edge?.node);
+          if (!target || target.type !== chainType) {
+            issues.push([source, "language model output must connect to a Basic LLM Chain"]);
+            continue;
+          }
+          let slots = inputs.get(target);
+          if (!slots)
+            inputs.set(target, slots = new Map);
+          const modelNode = nodes.get(source);
+          const model = modelNode && modelSubnodes.has(modelNode) ? readModel(modelNode) : undefined;
+          if (!model || edge.type !== connectionType || port !== 0 || edge.index !== 0 && edge.index !== 1 || slots.has(edge.index)) {
+            invalid.add(target);
+          } else {
+            slots.set(edge.index, model);
+          }
+        }
+      }
+    }
+    for (const node of workflow.nodes) {
+      if (node.type === chainType && !node.disabled && node.parameters?.needsFallback === true && !inputs.has(node)) {
+        inputs.set(node, new Map);
+      }
+    }
+    const chains = new Map;
+    for (const [chain, slots] of inputs) {
+      const primary = slots.get(0);
+      const fallback = slots.get(1);
+      if (invalid.has(chain) || !supportsChain(chain) || !primary || chain.parameters?.needsFallback === true !== Boolean(fallback)) {
+        issues.push([chain.name, "linked Basic LLM Chain requires v1.7 text prompts, one compatible primary model, and a fallback only when enabled"]);
+        chains.set(chain, null);
+      } else {
+        chains.set(chain, { primary, fallback });
+      }
+    }
+    return { chains, modelSubnodes, issues };
+  }
+  function mapLinkedLlmChain(ctx, models) {
+    if (!models)
+      return 'throw new Error("Unsupported linked Basic LLM Chain configuration");';
+    const params = ctx.node.parameters ?? {};
+    const prompt = ExpressionParser.parse(params.text, "source[0]", "source");
+    const messages = (params.messages?.messageValues ?? []).map((message) => {
+      const role = roles.get(message.type ?? "SystemMessagePromptTemplate");
+      return `{ role: ${JSON.stringify(role)}, content: String(${ExpressionParser.parse(message.message, "source[0]", "source")} ?? '') }`;
+    });
+    const renderModel = ({ id, transport, model, options }) => `{
+      id: ${JSON.stringify(id)}, transport: ${JSON.stringify(transport)}, model: String(${ExpressionParser.parse(model, "source[0]", "source")} ?? ''),
+      options: { ${options.map(([key, value]) => `${JSON.stringify(key)}: ${ExpressionParser.parse(value, "source[0]", "source")}`).join(", ")} },
+    }`;
+    const batchSize = ExpressionParser.parse(params.batching?.batchSize ?? 5, "source[0]", "source");
+    const delay = ExpressionParser.parse(params.batching?.delayBetweenBatches ?? 0, "source[0]", "source");
+    return `
+    {
+      const source: N8nItem[] = ${ctx.previousVariableName ?? "inputItems"} || inputItems;
+      ${ctx.variableName} = await runLinkedLlmChain(source, item => [${[...messages, `{ role: 'user', content: String(${prompt} ?? '') }`].join(", ")}], item => ({
+        primary: ${renderModel(models.primary)},
+        ${models.fallback ? `fallback: ${renderModel(models.fallback)},` : ""}
+        batchSize: Number(${batchSize}),
+        delay: Number(${delay}),
+      }));
+      item = ${ctx.variableName}[0] || { json: {} };
+      ctx.setNodeOutputs(${JSON.stringify(ctx.node.name)}, [[0, ${ctx.variableName}]], ${ctx.variableName});
+    }`;
+  }
+
   // src/compiler/code-generator.ts
   class CodeGenerator {
     static sanitizeIdentifier(str) {
       return str.replace(/[^a-zA-Z0-9_]/g, "_").replace(/^[0-9]/, "_$&").replace(/__+/g, "_");
     }
-    static generateWorkflowCode(wf) {
+    static generateWorkflowCode(wf, adapters = []) {
+      const communityNodes = selectCommunityAdapters(wf, adapters);
       const functionName = `workflow_${this.sanitizeIdentifier(wf.fileName)}`;
       const depth = (wf.relativePath.match(/\//g) || []).length;
       const runtimePrefix = "../".repeat(depth + 1) + "runtime";
+      const { chains, modelSubnodes } = planLanguageModels(wf);
+      const linkedLlmImport = [...chains.values()].some(Boolean) ? `import { runLinkedLlmChain } from '${runtimePrefix}/linked-llm';
+` : "";
+      const httpContinuationImport = wf.nodes.some((node) => !node.disabled && (continuesHttpOnRegularOutput(node) || continuesHttpOnErrorOutput(node))) ? `import { fetchForRegularOutput, settleHttpItems } from '${runtimePrefix}/http-regular-output';
+` : "";
+      const httpErrorOutputImport = wf.nodes.some((node) => !node.disabled && continuesHttpOnErrorOutput(node)) ? `import { partitionHttpErrorItems } from '${runtimePrefix}/http-error-output';
+` : "";
+      const codeHttpRequestImport = wf.nodes.some(isCodeNode) ? `import { codeHttpRequest } from '${runtimePrefix}/code-http-request';
+` : "";
       const positionMergeImport = wf.nodes.some(isPositionMerge) ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';
 ` : "";
-      const legacyNodes = new Set(wf.nodes.filter((node) => usesLegacyNodeReferences(node) || usesRawLegacyNodeReferences(node)));
+      const communityImports = communityNodes.size > 0 ? [
+        `import { executeCommunityAdapter } from '${runtimePrefix}/community-adapter';`,
+        ...[...new Set(communityNodes.values())].map((adapter) => `import ${adapter.binding} from ${JSON.stringify(`${runtimePrefix}/adapters/${adapter.fileName}`)};`),
+        ""
+      ].join(`
+`) : "";
+      const legacyNodes = new Set(wf.nodes.filter((node) => usesLegacyNodeReferences(node) || usesRawLegacyNodeReferences(node) || usesHttpLegacyNodeReferences(node)));
       const rawFieldsImport = wf.nodes.some(isRawEditFields) ? `import { applyRawEditFields, encodeJsonTemplateValue } from '${runtimePrefix}/raw-edit-fields';
 ` : "";
       const legacyImport = legacyNodes.size > 0 ? `import { createLegacyNodeReferences } from '${runtimePrefix}/code-context';
 ` : "";
-      const workflowNodeNames = legacyNodes.size > 0 || wf.nodes.some(usesCodeNodeLookups) ? `const workflowNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map((node) => node.name))});
+      const retryNodes = wf.nodes.filter((node) => !node.disabled && usesNodeRetry(node));
+      const retryImport = retryNodes.length > 0 ? `import { runWithNodeRetry${retryNodes.some((node) => node.type === "n8n-nodes-base.httpRequest") ? ", settleRetryRequests" : ""} } from '${runtimePrefix}/node-retry';
+` : "";
+      const workflowNodeNames = legacyNodes.size > 0 || wf.nodes.some((node) => usesCodeNodeLookups(node) || usesCodeItemMatching(node)) ? `const workflowNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map((node) => node.name))});
 ` : "";
       const nodesByName = new Map(wf.nodes.map((node) => [node.name, node]));
+      const batchLookup = wf.nodes.some((node) => !node.disabled && usesCodeItemMatching(node)) ? "getItemMatchingBatches" : "getNodeOutputBatches";
       const rabbitMqImport = wf.nodes.some((node) => node.type === rabbitMqPublisherType) ? `import { publishRabbitMq } from '${runtimePrefix}/rabbitmq';
 ` : "";
       const s3Import = wf.nodes.some((node) => node.type === s3NodeType) ? `import { downloadS3Files } from '${runtimePrefix}/s3';
@@ -1535,18 +2405,26 @@ ${legacyBinding}${nodeLookupBinding}${execution}
 ` : "";
       const jsonFileImport = wf.nodes.some((node) => node.type === convertToFileType) ? `import { convertItemsToJsonFile } from '${runtimePrefix}/convert-to-json';
 ` : "";
-      const httpRequestImport = wf.nodes.some((node) => node.type.includes("httpRequest") && (usesMultipartBody(node.parameters) || usesJsonHeaders(node.parameters))) ? `import { createRequestForm, parseRequestHeaders } from '${runtimePrefix}/http-request';
+      const extractFileImport = wf.nodes.some((node) => node.type === extractFromFileType) ? `import { extractBase64Items } from '${runtimePrefix}/extract-from-file';
+` : "";
+      const httpRequestImport = wf.nodes.some((node) => node.type.includes("httpRequest") && (usesMultipartBody(node.parameters) || usesJsonHeaders(node.parameters) || usesFileResponse(node.parameters))) ? `import { createRequestForm, parseRequestHeaders, readFileResponse } from '${runtimePrefix}/http-request';
 ` : "";
       const waitImport = wf.nodes.some((node) => node.type === waitNodeType) ? `import { waitForInterval } from '${runtimePrefix}/wait-interval';
 ` : "";
       const stopAndErrorImport = wf.nodes.some((node) => node.type === stopAndErrorType) ? `import { createWorkflowStopError } from '${runtimePrefix}/stop-and-error';
 ` : "";
-      const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
+      const jsonBodyImport = wf.nodes.some((node) => node.type.includes("httpRequest") && node.parameters?.jsonBody && !usesMultipartBody(node.parameters) && ["POST", "PUT", "PATCH"].includes((node.parameters.method ?? "GET").toUpperCase())) ? `import { encodeJsonRequestBody } from '${runtimePrefix}/http-request';
+` : "";
+      const httpStatusImport = wf.nodes.some((node) => node.type.includes("httpRequest")) ? `import { fetchWithStatus } from '${runtimePrefix}/http-request';
+` : "";
+      const httpTimeoutImport = wf.nodes.some((node) => node.type.includes("httpRequest")) ? `import { createResponseTimeout } from '${runtimePrefix}/http-request';
+` : "";
+      const imports = `${codeHttpRequestImport}import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
-import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
-${workflowNodeNames}
-const DateTime = {
+${communityImports}import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
+${httpStatusImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
+${httpTimeoutImport}${jsonBodyImport}${extractFileImport}${linkedLlmImport}${workflowNodeNames}
+${retryImport}const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),
     toJSDate: () => new Date()
@@ -1555,26 +2433,44 @@ const DateTime = {
 `;
       let declCode = `  let item: N8nItem = inputItems[0] || { json: {} };
 `;
+      if (wf.useCanvasOrder)
+        declCode += `  let workflowItems = inputItems;
+`;
       let bodyCode = `  ctx.setNodeOutput("__initial__", inputItems);
 `;
+      const emitNodeBlock = (node, condition, code) => {
+        if (wf.useCanvasOrder && (node.type !== stopAndErrorType || node.disabled)) {
+          code += `
+workflowItems = ctx.getNode(${JSON.stringify(node.name)}).all();`;
+        }
+        return this.generateNodeBlock(wf.id, node, condition, code);
+      };
       const nodeVarMap = new Map;
       wf.orderedNodes.forEach((node, index) => {
         const varName = `node_${index}_${this.sanitizeIdentifier(node.name)}`;
         nodeVarMap.set(node.name, varName);
       });
       const triggers = wf.triggers;
-      const hasRabbitMqTrigger = triggers.some((node) => node.type === rabbitMqTriggerType);
+      const hasEventTrigger = triggers.some((node) => node.type === rabbitMqTriggerType || node.type === postgresTriggerType && !node.disabled);
       const disabledModes = new Map(wf.orderedNodes.map((node) => [node, getDisabledNodeMode(node, wf)]));
-      const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n) && disabledModes.get(n) !== "skip");
+      const nonTriggers = wf.orderedNodes.filter((n) => !triggers.includes(n) && !modelSubnodes.has(n) && disabledModes.get(n) !== "skip");
       const loops = wf.pollingLoops ?? [];
       const loopsByMember = new Map(loops.flatMap((loop) => loop.nodes.map((name) => [name, loop])));
-      const terminalNames = new Set(loops.flatMap((loop) => loop.terminalExits.map((exit) => exit.target)));
+      const terminalNames = new Set(loops.flatMap((loop) => ("terminalExits" in loop) ? loop.terminalExits.map((exit) => exit.target) : []));
       const mapNode = (node, previousVariableName) => {
         const varName = nodeVarMap.get(node.name);
-        return disabledModes.get(node) === "passthrough" ? `
+        if (disabledModes.get(node) === "passthrough")
+          return `
     ${varName} = ${previousVariableName} || [];
     item = ${varName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});` : NodeMappers.mapNode({
+    ctx.setNodeOutput(${JSON.stringify(node.name)}, ${varName});`;
+        const adapter = communityNodes.get(node);
+        if (adapter)
+          return mapCommunityNode(node, adapter, varName, previousVariableName);
+        if (chains.has(node)) {
+          return mapLinkedLlmChain({ node, workflowName: wf.name, variableName: varName, previousVariableName }, chains.get(node) ?? null);
+        }
+        return NodeMappers.mapNode({
           node,
           workflowName: wf.name,
           variableName: varName,
@@ -1583,13 +2479,15 @@ const DateTime = {
         });
       };
       triggers.forEach((node) => {
+        if (node.type === postgresTriggerType && node.disabled)
+          return;
         const index = wf.orderedNodes.indexOf(node);
         const varName = nodeVarMap.get(node.name);
         declCode += `  let ${varName}: any = inputItems;
 `;
         const nodeName = JSON.stringify(node.name);
         let condition = `entryNode === ${nodeName}`;
-        if (node.type !== rabbitMqTriggerType) {
+        if (node.type !== rabbitMqTriggerType && node.type !== postgresTriggerType) {
           const rawNodePath = (node.parameters?.path || node.name).toLowerCase().trim().replace(/^\/+/, "");
           bodyCode += `  const triggerNode_${index} = item?.json?.__triggerNode;
 `;
@@ -1599,7 +2497,7 @@ const DateTime = {
         }
         const nodeCode = `${varName} = inputItems;
 ctx.setNodeOutput(${nodeName}, inputItems);`;
-        bodyCode += this.generateNodeBlock(wf.id, node, condition, nodeCode);
+        bodyCode += emitNodeBlock(node, condition, nodeCode);
       });
       nonTriggers.forEach((node) => {
         const varName = nodeVarMap.get(node.name);
@@ -1608,7 +2506,7 @@ ctx.setNodeOutput(${nodeName}, inputItems);`;
         const loop = loopsByMember.get(node.name);
         if (loop) {
           if (node.name === loop.entry) {
-            bodyCode += emitPollingLoop(loop, nodesByName, mapNode, (member, condition, code) => this.generateNodeBlock(wf.id, member, condition, code));
+            bodyCode += "routes" in loop ? emitMultiReturnPollingLoop(loop, nodesByName, mapNode, emitNodeBlock) : emitPollingLoop(loop, nodesByName, mapNode, emitNodeBlock);
           }
           return;
         }
@@ -1616,7 +2514,7 @@ ctx.setNodeOutput(${nodeName}, inputItems);`;
           return;
         let branchCheckStr = "true";
         const incoming = node.incomingConnections ?? [];
-        const runPerIncomingBatch = incoming.length > 0 && !node.type.includes("merge");
+        const runPerIncomingBatch = incoming.length > 0 && (disabledModes.get(node) === "passthrough" || communityNodes.has(node) || !node.type.includes("merge"));
         if (incoming.length > 0) {
           const branchChecks = incoming.map((conn) => `ctx.isBranchActive(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`);
           branchCheckStr = `(${branchChecks.join(" || ")})`;
@@ -1624,8 +2522,18 @@ ctx.setNodeOutput(${nodeName}, inputItems);`;
         const prevExpr = runPerIncomingBatch ? "incomingItems" : "inputItems";
         let nodeCode = mapNode(node, prevExpr);
         if (runPerIncomingBatch) {
-          const batches = incoming.map((conn) => `ctx.getNodeOutputBatches(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`);
-          nodeCode = `await ctx.runNodeBatches(${JSON.stringify(node.name)}, [${batches.join(", ")}].flat(), async (incomingItems) => {
+          const emittedRegions = new Set;
+          const inputBatches = incoming.flatMap((conn) => {
+            const region = loopsByMember.get(conn.sourceNode);
+            if (!region || !("routes" in region)) {
+              return [`ctx.${batchLookup}(${JSON.stringify(conn.sourceNode)}, ${conn.outputIndex})`];
+            }
+            if (emittedRegions.has(region.entry))
+              return [];
+            emittedRegions.add(region.entry);
+            return [`ctx.getPollingExitBatches(${JSON.stringify(region.entry)}, ${JSON.stringify(node.name)})`];
+          });
+          nodeCode = `await ctx.runNodeBatches(${JSON.stringify(node.name)}, [${inputBatches.join(", ")}].flat(), async (incomingItems) => {
 ${nodeCode.trim()}
 });`;
         }
@@ -1633,15 +2541,15 @@ ${nodeCode.trim()}
         if (ancestorTriggers.length > 0) {
           const triggerConditions = ancestorTriggers.map((t) => `ctx.hasExecutedNode(${JSON.stringify(t)})`).join(" || ");
           branchCheckStr = `(${triggerConditions}) && ${branchCheckStr}`;
-        } else if (hasRabbitMqTrigger) {
+        } else if (hasEventTrigger) {
           branchCheckStr = `entryNode === undefined && ${branchCheckStr}`;
         }
-        bodyCode += this.generateNodeBlock(wf.id, node, branchCheckStr, nodeCode, ancestorTriggers.length > 0 ? "      " : "    ");
+        bodyCode += emitNodeBlock(node, branchCheckStr, nodeCode);
       });
-      const lastNodeName = wf.orderedNodes.filter((node) => disabledModes.get(node) !== "skip" && (node.type !== stopAndErrorType || node.disabled)).at(-1)?.name;
-      const returnItemsExpr = lastNodeName ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])` : `inputItems`;
+      const lastNodeName = wf.orderedNodes.filter((node) => !modelSubnodes.has(node) && disabledModes.get(node) !== "skip" && (node.type !== stopAndErrorType || node.disabled)).at(-1)?.name;
+      const returnItemsExpr = wf.useCanvasOrder ? "workflowItems" : lastNodeName ? `(ctx.getNode(${JSON.stringify(lastNodeName)})?.all() || [{ json: item.json }])` : `inputItems`;
       const keys = Array.from(new Set([wf.id, wf.name, wf.fileName])).filter(Boolean);
-      return `${imports}
+      return `${httpContinuationImport}${httpErrorOutputImport}${imports}
 export async function ${functionName}(
   inputItems: N8nItem[] = [{ json: {} }],
   parentCtx?: WorkflowContext,
@@ -1658,14 +2566,13 @@ ${bodyCode}
 registerWorkflow(${JSON.stringify(keys)}, ${functionName});
 `;
     }
-    static generateNodeBlock(workflowId, node, condition, nodeCode, nodeIndent = "    ") {
+    static generateNodeBlock(workflowId, node, condition, nodeCode) {
       const traceArgs = [workflowId, node.id || node.name, node.name].map((value) => JSON.stringify(value)).join(", ");
-      const body = nodeIndent + nodeCode.trim().replace(/\n/g, `
-${nodeIndent}`);
+      const body = nodeCode.trim();
       return `  if (${condition}) {
     const finishTrace = ctx.startNodeTrace(${traceArgs});
     try {
-${body}
+      ${body}
     } catch (error) {
       finishTrace?.('error');
       throw error;
@@ -1689,13 +2596,15 @@ import { WorkflowContext } from '../runtime/workflow-context';
       const importedFunctions = [];
       workflows.forEach((wf) => {
         const functionName = `workflow_${CodeGenerator.sanitizeIdentifier(wf.fileName)}`;
-        const importPath = wf.relativePath.replace(/\.ts$/, "");
-        imports += `import { ${functionName} } from '../workflows/${importPath}';
+        const importPath = `../workflows/${wf.relativePath.replace(/\.ts$/, "")}`;
+        imports += `import { ${functionName} } from ${JSON.stringify(importPath)};
 `;
         importedFunctions.push(functionName);
       });
       let routeDefinitions = "";
-      const rabbitMqStarts = [];
+      const listenerStarts = [];
+      const needsRabbitMq = workflows.some((workflow) => getRabbitMqTriggers(workflow).length > 0);
+      const needsPostgres = workflows.some((workflow) => getPostgresTriggers(workflow).length > 0);
       const registeredRoutes = new Set;
       workflows.forEach((wf) => {
         const functionName = `workflow_${CodeGenerator.sanitizeIdentifier(wf.fileName)}`;
@@ -1706,7 +2615,19 @@ import { WorkflowContext } from '../runtime/workflow-context';
             throw new Error(`Workflow ${JSON.stringify(wf.name)}, node ${JSON.stringify(node.name)}: ${options}`);
           }
           const logContext = JSON.stringify({ workflowId: wf.id, node: node.name });
-          rabbitMqStarts.push(`      stopConsumers.push(await startRabbitMqConsumer(
+          listenerStarts.push(`      stopListeners.push(await startRabbitMqConsumer(
+        ${JSON.stringify(options)},
+        (items) => ${functionName}(items, undefined, ${JSON.stringify(node.name)}),
+        (message) => fastify.log.error(${logContext}, message),
+      ));`);
+        }
+        for (const node of getPostgresTriggers(wf)) {
+          const options = parsePostgresTrigger(node);
+          if (typeof options === "string") {
+            throw new Error(`Workflow ${JSON.stringify(wf.name)}, node ${JSON.stringify(node.name)}: ${options}`);
+          }
+          const logContext = JSON.stringify({ workflowId: wf.id, node: node.name });
+          listenerStarts.push(`      stopListeners.push(await startPostgresTrigger(
         ${JSON.stringify(options)},
         (items) => ${functionName}(items, undefined, ${JSON.stringify(node.name)}),
         (message) => fastify.log.error(${logContext}, message),
@@ -1726,7 +2647,7 @@ import { WorkflowContext } from '../runtime/workflow-context';
               routeDefinitions += `
   fastify.route({
     method: '${httpMethod}',
-    url: '${routePath}',
+    url: ${JSON.stringify(routePath)},
     handler: async (request: FastifyRequest, reply: FastifyReply) => {
       const startTime = performance.now();
       const ctx = new WorkflowContext();
@@ -1771,24 +2692,30 @@ import { WorkflowContext } from '../runtime/workflow-context';
           });
         });
       });
-      if (rabbitMqStarts.length > 0) {
+      if (needsRabbitMq) {
         imports += `import { startRabbitMqConsumer } from '../runtime/rabbitmq';
 `;
+      }
+      if (needsPostgres) {
+        imports += `import { startPostgresTrigger } from '../runtime/postgres-trigger';
+`;
+      }
+      if (listenerStarts.length > 0) {
         routeDefinitions += `
-  const stopConsumers: Array<() => Promise<void>> = [];
-  const closeConsumers = async () => {
-    await Promise.allSettled(stopConsumers.splice(0).map(stop => stop()));
+  const stopListeners: Array<() => Promise<void>> = [];
+  const closeListeners = async () => {
+    await Promise.allSettled(stopListeners.splice(0).map(stop => stop()));
   };
   fastify.addHook('onReady', async () => {
     try {
-${rabbitMqStarts.join(`
+${listenerStarts.join(`
 `)}
     } catch (error) {
-      await closeConsumers();
+      await closeListeners();
       throw error;
     }
   });
-  fastify.addHook('onClose', closeConsumers);
+  fastify.addHook('onClose', closeListeners);
 `;
       }
       return `${imports}
@@ -1802,7 +2729,7 @@ ${routeDefinitions}
 `;
     }
     static generateServerEntry(workflows = []) {
-      const shutdown = workflows.some((workflow) => getRabbitMqTriggers(workflow).length > 0) ? `
+      const shutdown = workflows.some((workflow) => getRabbitMqTriggers(workflow).length > 0 || getPostgresTriggers(workflow).length > 0) ? `
   const close = () => {
     void fastify.close().catch(error => {
       fastify.log.error(error);
@@ -1845,9 +2772,10 @@ try {
     }
     static generateOutputPackageJson(workflows = [], dependencies = {}) {
       const needsRabbitMq = workflows.some((workflow) => getRabbitMqTriggers(workflow).length > 0 || workflow.nodes.some((node) => node.type === rabbitMqPublisherType));
+      const needsPostgres = workflows.some((workflow) => getPostgresTriggers(workflow).length > 0);
       const needsS3 = workflows.some((workflow) => workflow.nodes.some((node) => node.type === s3NodeType));
       const needsCompression = workflows.some((workflow) => workflow.nodes.some((node) => node.type === compressionNodeType));
-      const needsMimeTypes = needsS3 || needsCompression || workflows.some((workflow) => workflow.nodes.some((node) => node.type === convertToFileType));
+      const needsMimeTypes = needsS3 || needsCompression || workflows.some((workflow) => workflow.nodes.some((node) => node.type === convertToFileType || node.type === "n8n-nodes-base.httpRequest" && usesFileResponse(node.parameters)));
       return JSON.stringify({
         name: "compiled-n8n-service",
         version: "1.0.0",
@@ -1860,6 +2788,7 @@ try {
           "@fastify/cors": "^9.0.1",
           fastify: "^4.28.1",
           ...needsRabbitMq ? { amqplib: "^0.10.9" } : {},
+          ...needsPostgres ? { pg: "8.16.3" } : {},
           ...needsS3 ? { "@aws-sdk/client-s3": "3.808.0" } : {},
           ...needsMimeTypes ? { "mime-types": "^3.0.1" } : {},
           ...needsCompression ? { fflate: "0.8.3" } : {},
