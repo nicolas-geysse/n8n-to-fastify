@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, integration/deposium-fork]
   pull_request:
-    branches: [main]
+    branches: [main, integration/deposium-fork]
 
 jobs:
   test-and-typecheck:
