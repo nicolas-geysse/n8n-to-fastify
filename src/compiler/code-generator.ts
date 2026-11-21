@@ -5,7 +5,7 @@ import { mapCommunityNode, selectCommunityAdapters, type CommunityAdapter } from
 import { emitMultiReturnPollingLoop, emitPollingLoop } from './polling-code';
 import { getDisabledNodeMode } from './disabled-node';
 import { isPositionMerge } from './mappers/position-merge';
-import { collectLegacyNodePorts, isCodeNode, usesCodeItemMatching, usesLegacyNodeReferences } from './mappers/code-context';
+import { collectLegacyNodePorts, isCodeNode, usesCodeItemMatching, usesCodeNodeLookups, usesLegacyNodeReferences } from './mappers/code-context';
 import { isRawEditFields, usesRawLegacyNodeReferences } from './mappers/raw-edit-fields';
 import { rabbitMqPublisherType } from './mappers/rabbitmq';
 import { s3NodeType } from './mappers/s3';
@@ -70,8 +70,8 @@ export class CodeGenerator {
     const retryImport = retryNodes.length > 0
       ? `import { runWithNodeRetry${retryNodes.some(node => node.type === 'n8n-nodes-base.httpRequest') ? ', settleRetryRequests' : ''} } from '${runtimePrefix}/node-retry';\n`
       : '';
-    const legacyNames = legacyNodes.size > 0
-      ? `const legacyNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map(node => node.name))});\n`
+    const workflowNodeNames = legacyNodes.size > 0 || wf.nodes.some(node => usesCodeNodeLookups(node) || usesCodeItemMatching(node))
+      ? `const workflowNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map(node => node.name))});\n`
       : '';
     const nodesByName = new Map(wf.nodes.map(node => [node.name, node]));
     const batchLookup = wf.nodes.some(node => !node.disabled && usesCodeItemMatching(node))
@@ -118,7 +118,7 @@ export class CodeGenerator {
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 ${communityImports}import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
 ${httpStatusImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
-${httpTimeoutImport}${jsonBodyImport}${extractFileImport}${linkedLlmImport}${legacyNames}
+${httpTimeoutImport}${jsonBodyImport}${extractFileImport}${linkedLlmImport}${workflowNodeNames}
 ${retryImport}const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),
