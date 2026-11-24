@@ -412,6 +412,20 @@
     }
   }
 
+  // src/compiler/mappers/node-retry.ts
+  function usesNodeRetry(node) {
+    return node.retryOnFail === true && (node.type === "n8n-nodes-base.httpRequest" || node.type === "n8n-nodes-base.s3");
+  }
+  function withNodeRetry(node, operation) {
+    if (!usesNodeRetry(node))
+      return operation;
+    const maxTries = Math.min(5, Math.max(2, Math.trunc(Number(node.maxTries) || 3)));
+    const configuredDelay = node.waitBetweenTries;
+    const delayNumber = typeof configuredDelay === "string" && configuredDelay.trim() ? Number(configuredDelay) : configuredDelay;
+    const delay = typeof delayNumber === "number" && Number.isFinite(delayNumber) ? Math.min(5000, Math.max(0, Math.trunc(delayNumber))) : 1000;
+    return `runWithNodeRetry(() => ${operation}, ${maxTries}, ${delay})`;
+  }
+
   // src/compiler/expression-parser.ts
   class ExpressionParser {
     static parse(expression, firstInputItem, inputItems = "inputItems") {
@@ -731,15 +745,15 @@
     const bucket = ExpressionParser.parse(params.bucketName);
     const key = ExpressionParser.parse(params.fileKey);
     const binaryProperty = ExpressionParser.parse(params.binaryPropertyName ?? "data");
-    return `
-    {
-      const downloads = (${source} || inputItems).map((item: N8nItem) => ({
+    const download = `downloadS3Files((${source} || inputItems).map((item: N8nItem) => ({
         item,
         bucket: String(${bucket} ?? ''),
         key: String(${key} ?? ''),
         binaryProperty: String(${binaryProperty} ?? ''),
-      }));
-      ${ctx.variableName} = await downloadS3Files(downloads);
+      })))`;
+    return `
+    {
+      ${ctx.variableName} = await ${withNodeRetry(ctx.node, download)};
       item = ${ctx.variableName}[0] || { json: {} };
       ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});
     }`;
@@ -1422,9 +1436,8 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
         responseSnippet = `const outputProperty = ((item: N8nItem) => ${outputProperty})(batch[0]);
       return readFileResponse(res, targetUrl, currentItem, String(outputProperty ?? 'data'), index);`;
       }
-      return `
-    // [Node: ${ctx.node.name}] Native HTTP Request (${method})
-    ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (${callbackParameters}) => {
+      const collectItems = usesNodeRetry(ctx.node) ? "settleRetryRequests" : "Promise.all";
+      const request = `${collectItems}((${prevVar} || inputItems).map(async (${callbackParameters}) => {
       const item = currentItem;
       const targetUrl = ${urlExpr};
       const responseTimeout = createResponseTimeout(${timeout});
@@ -1437,7 +1450,10 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
         signal: responseTimeout.start(),
       }).finally(responseTimeout.clear);
       ${responseSnippet}
-    }));
+    }))`;
+      return `
+    // [Node: ${ctx.node.name}] Native HTTP Request (${method})
+    ${ctx.variableName} = await ${withNodeRetry(ctx.node, request)};
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
     }
@@ -1675,10 +1691,13 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
 ` : "";
       const httpTimeoutImport = wf.nodes.some((node) => node.type.includes("httpRequest")) ? `import { createResponseTimeout } from '${runtimePrefix}/http-request';
 ` : "";
+      const retryNodes = wf.nodes.filter((node) => !node.disabled && usesNodeRetry(node));
+      const retryImport = retryNodes.length > 0 ? `import { runWithNodeRetry${retryNodes.some((node) => node.type === "n8n-nodes-base.httpRequest") ? ", settleRetryRequests" : ""} } from '${runtimePrefix}/node-retry';
+` : "";
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${httpStatusImport}${httpTimeoutImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
+${httpStatusImport}${retryImport}${httpTimeoutImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({

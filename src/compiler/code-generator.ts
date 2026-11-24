@@ -1,3 +1,4 @@
+import { usesNodeRetry } from './mappers/node-retry';
 import { N8nNode, ParsedWorkflow } from './parser';
 import { postgresTriggerType } from './postgres-trigger';
 import { NodeMappers } from './mappers';
@@ -77,10 +78,15 @@ export class CodeGenerator {
       ? `import { createResponseTimeout } from '${runtimePrefix}/http-request';\n`
       : '';
 
+        const retryNodes = wf.nodes.filter(node => !node.disabled && usesNodeRetry(node));
+    const retryImport = retryNodes.length > 0
+      ? `import { runWithNodeRetry${retryNodes.some(node => node.type === 'n8n-nodes-base.httpRequest') ? ', settleRetryRequests' : ''} } from '${runtimePrefix}/node-retry';\n`
+      : '';
+
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${httpStatusImport}${httpTimeoutImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
+${httpStatusImport}${retryImport}${httpTimeoutImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({

@@ -11,6 +11,7 @@ import { compressionNodeType, mapCompression } from './compression';
 import { convertToFileType, mapConvertToFile } from './convert-to-file';
 import { mapWaitInterval, waitNodeType } from './wait-interval';
 import { mapStopAndError, stopAndErrorType } from './stop-and-error';
+import { usesNodeRetry, withNodeRetry } from './node-retry';
 import { generateMultipartBody, getMultipartIssue, usesFileResponse, usesJsonHeaders, usesMultipartBody } from './http-request';
 
 export interface NodeMapperContext {
@@ -582,9 +583,8 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       return readFileResponse(res, targetUrl, currentItem, String(outputProperty ?? 'data'), index);`;
     }
 
-    return `
-    // [Node: ${ctx.node.name}] Native HTTP Request (${method})
-    ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (${callbackParameters}) => {
+    const collectItems = usesNodeRetry(ctx.node) ? 'settleRetryRequests' : 'Promise.all';
+    const request = `${collectItems}((${prevVar} || inputItems).map(async (${callbackParameters}) => {
       const item = currentItem;
       const targetUrl = ${urlExpr};
       const responseTimeout = createResponseTimeout(${timeout});
@@ -597,7 +597,11 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
         signal: responseTimeout.start(),
       }).finally(responseTimeout.clear);
       ${responseSnippet}
-    }));
+    }))`;
+
+    return `
+    // [Node: ${ctx.node.name}] Native HTTP Request (${method})
+    ${ctx.variableName} = await ${withNodeRetry(ctx.node, request)};
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
   }
