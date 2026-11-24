@@ -528,6 +528,9 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
     const timeout = ExpressionParser.parse(params.options?.timeout ?? 0);
     const multipart = usesMultipartBody(params);
     const jsonHeaders = usesJsonHeaders(params);
+    const legacyBinding = (index: string): string => ctx.legacyNodePorts
+      ? `const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)}, ${index}, batch);`
+      : '';
     // HTTP Request v1/v2 serialized Never Error as Ignore Response Code.
     const legacyIgnoreError = (ctx.node.typeVersion ?? 1) < 3 ? params.options?.ignoreResponseCode : undefined;
     const neverError = ExpressionParser.parse(params.options?.response?.response?.neverError ?? legacyIgnoreError ?? false);
@@ -569,13 +572,15 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       if (!reqHeaders.has('content-type')) reqHeaders.set('content-type', 'application/json');`;
     }
 
-    let callbackParameters = 'currentItem: N8nItem';
+    let callbackParameters = ctx.legacyNodePorts
+      ? 'currentItem: N8nItem, index: number, batch: N8nItem[]'
+      : 'currentItem: N8nItem';
     let responseSnippet = `const text = await res.text();
       let data: any;
       try { data = JSON.parse(text); } catch { data = { raw: text }; }
       return { json: typeof data === 'object' && data !== null ? data : { data } };`;
     if (usesFileResponse(params)) {
-      callbackParameters += ', index: number, batch: N8nItem[]';
+      if (!ctx.legacyNodePorts) callbackParameters += ', index: number, batch: N8nItem[]';
       const outputProperty = ExpressionParser.parse(
         params.options.response.response.outputPropertyName ?? 'data', 'batch[0]', 'batch',
       );
@@ -586,6 +591,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
     const collectItems = usesNodeRetry(ctx.node) ? 'settleRetryRequests' : 'Promise.all';
     const request = `${collectItems}((${prevVar} || inputItems).map(async (${callbackParameters}) => {
       const item = currentItem;
+      ${legacyBinding('index')}
       const targetUrl = ${urlExpr};
       const responseTimeout = createResponseTimeout(${timeout});
       ${headersSnippet}

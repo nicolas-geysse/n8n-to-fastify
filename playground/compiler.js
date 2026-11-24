@@ -925,6 +925,9 @@
   }
 
   // src/compiler/mappers/http-request.ts
+  function usesHttpLegacyNodeReferences(node) {
+    return node.type === "n8n-nodes-base.httpRequest" && /\$node\b/.test(JSON.stringify(node.parameters ?? {}));
+  }
   function usesMultipartBody(params) {
     return params?.sendBody === true && params.contentType === "multipart-form-data";
   }
@@ -1392,6 +1395,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       const timeout = ExpressionParser.parse(params.options?.timeout ?? 0);
       const multipart = usesMultipartBody(params);
       const jsonHeaders = usesJsonHeaders(params);
+      const legacyBinding = (index) => ctx.legacyNodePorts ? `const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)}, ${index}, batch);` : "";
       const legacyIgnoreError = (ctx.node.typeVersion ?? 1) < 3 ? params.options?.ignoreResponseCode : undefined;
       const neverError = ExpressionParser.parse(params.options?.response?.response?.neverError ?? legacyIgnoreError ?? false);
       let headersObj = "{}";
@@ -1425,13 +1429,14 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
         headersSnippet = `const reqHeaders = ${headersObj};
       if (!reqHeaders.has('content-type')) reqHeaders.set('content-type', 'application/json');`;
       }
-      let callbackParameters = "currentItem: N8nItem";
+      let callbackParameters = ctx.legacyNodePorts ? "currentItem: N8nItem, index: number, batch: N8nItem[]" : "currentItem: N8nItem";
       let responseSnippet = `const text = await res.text();
       let data: any;
       try { data = JSON.parse(text); } catch { data = { raw: text }; }
       return { json: typeof data === 'object' && data !== null ? data : { data } };`;
       if (usesFileResponse(params)) {
-        callbackParameters += ", index: number, batch: N8nItem[]";
+        if (!ctx.legacyNodePorts)
+          callbackParameters += ", index: number, batch: N8nItem[]";
         const outputProperty = ExpressionParser.parse(params.options.response.response.outputPropertyName ?? "data", "batch[0]", "batch");
         responseSnippet = `const outputProperty = ((item: N8nItem) => ${outputProperty})(batch[0]);
       return readFileResponse(res, targetUrl, currentItem, String(outputProperty ?? 'data'), index);`;
@@ -1439,6 +1444,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       const collectItems = usesNodeRetry(ctx.node) ? "settleRetryRequests" : "Promise.all";
       const request = `${collectItems}((${prevVar} || inputItems).map(async (${callbackParameters}) => {
       const item = currentItem;
+      ${legacyBinding("index")}
       const targetUrl = ${urlExpr};
       const responseTimeout = createResponseTimeout(${timeout});
       ${headersSnippet}
@@ -1665,7 +1671,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       const runtimePrefix = "../".repeat(depth + 1) + "runtime";
       const positionMergeImport = wf.nodes.some(isPositionMerge) ? `import { mergeByPosition } from '${runtimePrefix}/position-merge';
 ` : "";
-      const legacyNodes = new Set(wf.nodes.filter((node) => usesLegacyNodeReferences(node) || usesRawLegacyNodeReferences(node)));
+      const legacyNodes = new Set(wf.nodes.filter((node) => usesLegacyNodeReferences(node) || usesRawLegacyNodeReferences(node) || usesHttpLegacyNodeReferences(node)));
       const rawFieldsImport = wf.nodes.some(isRawEditFields) ? `import { applyRawEditFields, encodeJsonTemplateValue } from '${runtimePrefix}/raw-edit-fields';
 ` : "";
       const legacyImport = legacyNodes.size > 0 ? `import { createLegacyNodeReferences } from '${runtimePrefix}/code-context';
