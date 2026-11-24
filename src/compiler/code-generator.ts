@@ -83,10 +83,15 @@ export class CodeGenerator {
       ? `import { runWithNodeRetry${retryNodes.some(node => node.type === 'n8n-nodes-base.httpRequest') ? ', settleRetryRequests' : ''} } from '${runtimePrefix}/node-retry';\n`
       : '';
 
+    const jsonBodyImport = wf.nodes.some(node =>
+      node.type.includes('httpRequest') && node.parameters?.jsonBody && !usesMultipartBody(node.parameters) &&
+      ['POST', 'PUT', 'PATCH'].includes((node.parameters.method ?? 'GET').toUpperCase())
+    ) ? `import { encodeJsonRequestBody } from '${runtimePrefix}/http-request';\n` : '';
+
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${httpStatusImport}${retryImport}${httpTimeoutImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
+${jsonBodyImport}${httpStatusImport}${retryImport}${httpTimeoutImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({

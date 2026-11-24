@@ -1413,7 +1413,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
         bodySnippet = generateMultipartBody(params);
       } else if (["POST", "PUT", "PATCH"].includes(method)) {
         if (params.jsonBody) {
-          bodySnippet = `JSON.stringify(${ExpressionParser.parse(params.jsonBody)})`;
+          bodySnippet = `encodeJsonRequestBody(${ExpressionParser.parse(params.jsonBody)})`;
         } else if (params.bodyParameters?.parameters && Array.isArray(params.bodyParameters.parameters)) {
           const pairs = params.bodyParameters.parameters.filter((p) => p.name).map((p) => `${JSON.stringify(p.name)}: ${ExpressionParser.parse(p.value)}`);
           bodySnippet = `JSON.stringify({ ${pairs.join(", ")} })`;
@@ -1700,10 +1700,12 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       const retryNodes = wf.nodes.filter((node) => !node.disabled && usesNodeRetry(node));
       const retryImport = retryNodes.length > 0 ? `import { runWithNodeRetry${retryNodes.some((node) => node.type === "n8n-nodes-base.httpRequest") ? ", settleRetryRequests" : ""} } from '${runtimePrefix}/node-retry';
 ` : "";
+      const jsonBodyImport = wf.nodes.some((node) => node.type.includes("httpRequest") && node.parameters?.jsonBody && !usesMultipartBody(node.parameters) && ["POST", "PUT", "PATCH"].includes((node.parameters.method ?? "GET").toUpperCase())) ? `import { encodeJsonRequestBody } from '${runtimePrefix}/http-request';
+` : "";
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${httpStatusImport}${retryImport}${httpTimeoutImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
+${jsonBodyImport}${httpStatusImport}${retryImport}${httpTimeoutImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({
