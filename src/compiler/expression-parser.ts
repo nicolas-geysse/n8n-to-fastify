@@ -92,6 +92,42 @@ export class ExpressionParser {
       return `process.env.${envVar}`;
     });
 
+    result = this.rewriteBinaryReferences(result);
+
     return result;
+  }
+
+  /**
+   * Rewrites $binary expressions (e.g. $binary.data.fileName or $binary["key"]?.mimeType)
+   * to safe optional chaining (e.g. item?.binary?.data?.fileName or item?.binary?.["key"]?.mimeType)
+   * using native string parsing without external dependencies like js-tokens.
+   */
+  private static rewriteBinaryReferences(code: string): string {
+    if (!code.includes('$binary')) return code;
+
+    // Tokenize strings, template literals, and regexes to protect them from replacement
+    const protectedLiterals: string[] = [];
+    let cleanCode = code.replace(/(["'])(?:\\(?:\r\n|[\s\S])|(?!\1)[^\\\r\n])*\1|`(?:\\[\s\S]|[^`\\])*`|\/(?![*\/])(?:\\.|\[(?:\\.|[^\]\\])*\]|[^\/\\\r\n])+\/[gimuy]*/g, (match) => {
+      const token = `__LITERAL_PROTECTED_${protectedLiterals.length}__`;
+      protectedLiterals.push(match);
+      return token;
+    });
+
+    // 1. $binary.prop.sub -> item?.binary?.prop?.sub
+    cleanCode = cleanCode.replace(/(?<![.\w$])\$binary((?:\.[a-zA-Z0-9_]+|\[[^\]]+\])*)/g, (_, accessors) => {
+      if (!accessors) return 'item?.binary';
+      // Convert .prop to ?.prop and [key] to ?.[key]
+      const safeAccessors = accessors
+        .replace(/\.([a-zA-Z0-9_]+)/g, '?.$1')
+        .replace(/(\??\.?\[)/g, '?.[');
+      return `item?.binary${safeAccessors.startsWith('?.') ? '' : '?.'}${safeAccessors}`;
+    });
+
+    // Restore protected literals
+    protectedLiterals.forEach((lit, idx) => {
+      cleanCode = cleanCode.replace(`__LITERAL_PROTECTED_${idx}__`, lit);
+    });
+
+    return cleanCode;
   }
 }
