@@ -3,6 +3,7 @@ import { WorkflowTrace } from './workflow-trace';
 import type { NodeTraceSink } from './workflow-trace';
 
 export interface NodeAccessor {
+  readonly isExecuted: boolean;
   item?: N8nItem;
   first: () => N8nItem | undefined;
   all: () => N8nItem[];
@@ -214,6 +215,7 @@ export class WorkflowContext {
   public getNode(nodeName: string): NodeAccessor {
     const items = this.nodeOutputs.get(nodeName) || [];
     return {
+      isExecuted: this.hasExecutedNode(nodeName),
       item: items[0],
       first: () => items[0],
       all: () => items,

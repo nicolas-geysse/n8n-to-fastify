@@ -115,6 +115,62 @@ test('IF 2.2 routes each item to its true or false output and skips empty output
   });
 });
 
+test('Code nodes can distinguish skipped nodes from nodes that ran without output', async () => {
+  const conditions = { conditions: [
+    { leftValue: '={{ $json.ready }}', operator: { type: 'boolean', operation: 'true' } },
+  ] };
+  const target = (node: string) => ({ node, type: 'main', index: 0 });
+  const graph = {
+    nodes: [{
+      name: 'Empty',
+      type: 'n8n-nodes-base.code',
+      parameters: { jsCode: 'return [];' },
+    }, {
+      name: 'Skipped',
+      type: 'n8n-nodes-base.code',
+      parameters: { jsCode: 'return $input.all();' },
+    }, {
+      name: 'Inspect',
+      type: 'n8n-nodes-base.code',
+      parameters: { jsCode: `
+        const empty = $('Empty');
+        const skipped = $("Skipped");
+        return [{ json: {
+          emptyExecuted: $('Empty').isExecuted,
+          skippedExecuted: skipped.isExecuted,
+          decisionExecuted: $('Decision').isExecuted,
+          emptyItems: empty.all(),
+          skippedItems: skipped.all(),
+          skippedFirst: $('Skipped').first().json,
+          skippedItem: $('Skipped').item.json,
+          decisionItems: $('Decision').all().length,
+          decisionFirst: $('Decision').first().json.ready,
+          decisionItem: $('Decision').item.json.ready,
+        } }];
+      ` },
+    }],
+    connections: {
+      Decision: { main: [[target('Inspect'), target('Empty')], [target('Skipped')]] },
+    },
+  };
+
+  await withGeneratedWorkflow('if', 2.2, { conditions }, async run => {
+    const { context } = await run([{ json: { ready: true } }]);
+    expect(context.getNode('Inspect').first()?.json).toEqual({
+      emptyExecuted: true,
+      skippedExecuted: false,
+      decisionExecuted: true,
+      emptyItems: [],
+      skippedItems: [],
+      skippedFirst: {},
+      skippedItem: {},
+      decisionItems: 1,
+      decisionFirst: true,
+      decisionItem: true,
+    });
+  }, graph);
+});
+
 const rules = { values: [
   { conditions: { combinator: 'and', conditions: [
     { leftValue: '={{ $json.score }}', rightValue: 5, operator: { type: 'number', operation: 'gt' } },

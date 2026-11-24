@@ -482,7 +482,28 @@
       result = result.replace(/\$env\.([a-zA-Z0-9_]+)/g, (_, envVar) => {
         return `process.env.${envVar}`;
       });
+      result = this.rewriteBinaryReferences(result);
       return result;
+    }
+    static rewriteBinaryReferences(code) {
+      if (!code.includes("$binary"))
+        return code;
+      const protectedLiterals = [];
+      let cleanCode = code.replace(/(["'])(?:\\(?:\r\n|[\s\S])|(?!\1)[^\\\r\n])*\1|`(?:\\[\s\S]|[^`\\])*`|\/(?![*\/])(?:\\.|\[(?:\\.|[^\]\\])*\]|[^\/\\\r\n])+\/[gimuy]*/g, (match) => {
+        const token = `__LITERAL_PROTECTED_${protectedLiterals.length}__`;
+        protectedLiterals.push(match);
+        return token;
+      });
+      cleanCode = cleanCode.replace(/(?<![.\w$])\$binary((?:\.[a-zA-Z0-9_]+|\[[^\]]+\])*)/g, (_, accessors) => {
+        if (!accessors)
+          return "item?.binary";
+        const safeAccessors = accessors.replace(/\.([a-zA-Z0-9_]+)/g, "?.$1").replace(/(\??\.?\[)/g, "?.[");
+        return `item?.binary${safeAccessors.startsWith("?.") ? "" : "?."}${safeAccessors}`;
+      });
+      protectedLiterals.forEach((lit, idx) => {
+        cleanCode = cleanCode.replace(`__LITERAL_PROTECTED_${idx}__`, lit);
+      });
+      return cleanCode;
     }
   }
 
@@ -1062,6 +1083,7 @@ ${legacyItemsBinding}      const result = await (async () => {
     // [Node: ${ctx.node.name}] Code Execution
     ${ctx.variableName} = await (async () => {
       const currentItems = ${prevVar} || inputItems;
+      const $ = (nodeName: string) => ctx.getNode(nodeName);
 ${legacyBinding}${inputBinding}${itemsBinding}${execution}
     })();
     item = ${ctx.variableName}[0] || { json: {} };

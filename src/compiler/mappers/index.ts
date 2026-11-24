@@ -196,6 +196,7 @@ ${legacyItemsBinding}      const result = await (async () => {
     // [Node: ${ctx.node.name}] Code Execution
     ${ctx.variableName} = await (async () => {
       const currentItems = ${prevVar} || inputItems;
+      const $ = (nodeName: string) => ctx.getNode(nodeName);
 ${legacyBinding}${inputBinding}${itemsBinding}${execution}
     })();
     item = ${ctx.variableName}[0] || { json: {} };
