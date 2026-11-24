@@ -57,6 +57,10 @@ async function notifyBing(apiKey: string): Promise<void> {
     },
   );
   console.log(`[Bing SubmitUrlBatch] status=${batchRes.status}`);
+  if (batchRes.status === 400 || batchRes.status === 429) {
+    console.warn(`[Bing SubmitUrlBatch] Non-fatal HTTP ${batchRes.status} (daily quota or duplicate batch), continuing.`);
+    return;
+  }
   if (!batchRes.ok) throw new Error(`Bing SubmitUrlBatch failed with HTTP ${batchRes.status}`);
 }
 
