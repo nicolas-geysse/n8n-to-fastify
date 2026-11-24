@@ -1,8 +1,24 @@
 import type { N8nNode } from '../core-parser';
 
+const llmRetrySuffixes = [
+  'openAi',
+  'lmChatOpenAi',
+  'anthropic',
+  'lmChatAnthropic',
+  'googleGemini',
+  'lmChatGoogleGemini',
+  'groq',
+  'lmChatGroq',
+  'chainLlm',
+];
+
 export function usesNodeRetry(node: N8nNode): boolean {
-  return node.retryOnFail === true &&
-    (node.type === 'n8n-nodes-base.httpRequest' || node.type === 'n8n-nodes-base.s3');
+  return (
+    node.retryOnFail === true &&
+    (node.type === 'n8n-nodes-base.httpRequest' ||
+      node.type === 'n8n-nodes-base.s3' ||
+      llmRetrySuffixes.some(suffix => node.type.includes(suffix)))
+  );
 }
 
 export function withNodeRetry(node: N8nNode, operation: string): string {

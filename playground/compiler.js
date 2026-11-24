@@ -312,7 +312,7 @@
       nodes.forEach((node) => {
         node.incomingConnections = incomingMap.get(node.name) || [];
       });
-      const triggers = nodes.filter((node) => node.type === rabbitMqTriggerType || node.type === postgresTriggerType || node.type.includes("webhook") || node.type.includes("trigger") || node.type.includes("cron"));
+      const triggers = nodes.filter((node) => node.type === rabbitMqTriggerType || node.type === postgresTriggerType || node.type.toLowerCase().includes("webhook") && !node.type.includes("respondToWebhook") || node.type.toLowerCase().includes("trigger") && !node.type.includes("executeWorkflowTrigger") || node.type.toLowerCase().includes("cron"));
       const triggerNames = new Set(triggers.map((t) => t.name));
       nodes.forEach((node) => {
         const ancestorTriggers = new Set;
@@ -413,8 +413,19 @@
   }
 
   // src/compiler/mappers/node-retry.ts
+  var llmRetrySuffixes = [
+    "openAi",
+    "lmChatOpenAi",
+    "anthropic",
+    "lmChatAnthropic",
+    "googleGemini",
+    "lmChatGoogleGemini",
+    "groq",
+    "lmChatGroq",
+    "chainLlm"
+  ];
   function usesNodeRetry(node) {
-    return node.retryOnFail === true && (node.type === "n8n-nodes-base.httpRequest" || node.type === "n8n-nodes-base.s3");
+    return node.retryOnFail === true && (node.type === "n8n-nodes-base.httpRequest" || node.type === "n8n-nodes-base.s3" || llmRetrySuffixes.some((suffix) => node.type.includes(suffix)));
   }
   function withNodeRetry(node, operation) {
     if (!usesNodeRetry(node))
@@ -1223,6 +1234,24 @@
       if (type === "n8n-nodes-base.noOp") {
         return this.mapGenericNode(ctx, "No Operation");
       }
+      if (type === "n8n-nodes-base.manualTrigger" || type === "n8n-nodes-base.cron" || type === "n8n-nodes-base.scheduleTrigger") {
+        return this.mapGenericNode(ctx, `Trigger (${type})`);
+      }
+      if (type === "n8n-nodes-base.splitInBatches") {
+        return this.mapGenericNode(ctx, "Split In Batches");
+      }
+      if (type === "n8n-nodes-base.extractFromFile") {
+        return this.mapExtractFromFileNode(ctx);
+      }
+      if (type === "n8n-nodes-base.emailSend") {
+        return this.mapEmailSendNode(ctx);
+      }
+      if (type === "n8n-nodes-base.googleCalendar") {
+        return this.mapGoogleCalendarNode(ctx);
+      }
+      if (type === "n8n-nodes-evolution-api.evolutionApi") {
+        return this.mapEvolutionApiNode(ctx);
+      }
       return this.mapGenericNode(ctx, `Unmapped Node (${type})`);
     }
     static mapRespondToWebhookNode(ctx) {
@@ -1716,11 +1745,23 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});
     }`;
     }
+    static wrapContinueOnError(ctx, body) {
+      if (ctx.node.onError !== "continueRegularOutput" && ctx.node.onError !== "continueErrorOutput") {
+        return body;
+      }
+      return `
+    try {${body}
+    } catch (error) {
+      ${ctx.variableName} = [{ json: { error: error instanceof Error ? error.message : String(error) } }];
+      item = ${ctx.variableName}[0];
+      ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});
+    }`;
+    }
     static mapPostgresNode(ctx) {
       const params = ctx.node.parameters || {};
       const prevVar = ctx.previousVariableName || "inputItems";
       const queryExpr = ExpressionParser.parse(params.query || "SELECT 1;");
-      return `
+      return this.wrapContinueOnError(ctx, `
     // [Node: ${ctx.node.name}] PostgreSQL Query (via DATABASE_URL env var)
     ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
       const item = currentItem;
@@ -1741,7 +1782,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       return { json: { ...currentItem.json, _sqlPrepared: sql } };
     }));
     item = ${ctx.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`);
     }
     static mapLlmNode(ctx) {
       const params = ctx.node.parameters || {};
@@ -1766,9 +1807,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       const systemExpr = systemMessage ? ExpressionParser.parse(systemMessage) : "undefined";
       const temperature = params.options?.temperature ?? params.temperature;
       const maxTokens = params.options?.maxTokens ?? params.options?.maxTokensToSample ?? params.maxTokens;
-      return `
-    // [Node: ${ctx.node.name}] Native LLM Completion (${provider})
-    ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
+      const batchCall = `Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
       const item = currentItem;
       const prompt = String(${promptExpr} ?? '');
       const system = ${systemExpr};
@@ -1781,9 +1820,110 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
         ...(typeof ${JSON.stringify(maxTokens)} === 'number' ? { maxTokens: ${JSON.stringify(maxTokens)} } : {}),
       });
       return { json: { text: result.text, model: result.model, usage: result.usage } };
+    }))`;
+      return this.wrapContinueOnError(ctx, `
+    // [Node: ${ctx.node.name}] Native LLM Completion (${provider})
+    ${ctx.variableName} = await ${withNodeRetry(ctx.node, batchCall)};
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`);
+    }
+    static mapExtractFromFileNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const operation = params.operation || "binaryToPropery";
+      const binaryPropertyName = ExpressionParser.parse(params.binaryPropertyName || "data");
+      const destinationKey = ExpressionParser.parse(params.destinationKey || "data");
+      return this.wrapContinueOnError(ctx, `
+    // [Node: ${ctx.node.name}] Extract From File
+    ${ctx.variableName} = (${prevVar} || inputItems).map((currentItem: N8nItem) => {
+      const item = currentItem;
+      return extractFromFileItem(
+        currentItem,
+        ${JSON.stringify(operation)},
+        String(${binaryPropertyName} ?? 'data'),
+        String(${destinationKey} ?? 'data'),
+      );
+    });
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`);
+    }
+    static mapEmailSendNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const fromExpr = params.fromEmail ? ExpressionParser.parse(params.fromEmail) : "undefined";
+      const toExpr = ExpressionParser.parse(params.toEmail || "");
+      const subjectExpr = ExpressionParser.parse(params.subject || "");
+      const textExpr = params.text ? ExpressionParser.parse(params.text) : "undefined";
+      const htmlExpr = params.html ? ExpressionParser.parse(params.html) : "undefined";
+      return this.wrapContinueOnError(ctx, `
+    // [Node: ${ctx.node.name}] Send Email
+    ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
+      const item = currentItem;
+      return sendEmailItem({
+        ...( ${fromExpr} !== undefined ? { from: String(${fromExpr}) } : {}),
+        to: String(${toExpr} ?? ''),
+        subject: String(${subjectExpr} ?? ''),
+        ...( ${textExpr} !== undefined ? { text: String(${textExpr}) } : {}),
+        ...( ${htmlExpr} !== undefined ? { html: String(${htmlExpr}) } : {}),
+      });
     }));
     item = ${ctx.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`);
+    }
+    static mapGoogleCalendarNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const operation = params.operation || "getAll";
+      const calendarId = typeof params.calendar === "object" ? params.calendar?.value || "primary" : params.calendar || "primary";
+      const calExpr = ExpressionParser.parse(calendarId);
+      const eventIdExpr = params.eventId ? ExpressionParser.parse(params.eventId) : "undefined";
+      const summaryExpr = params.summary ? ExpressionParser.parse(params.summary) : "undefined";
+      const startExpr = params.start ? ExpressionParser.parse(params.start) : "undefined";
+      const endExpr = params.end ? ExpressionParser.parse(params.end) : "undefined";
+      const descExpr = params.additionalFields?.description ? ExpressionParser.parse(params.additionalFields.description) : "undefined";
+      return this.wrapContinueOnError(ctx, `
+    // [Node: ${ctx.node.name}] Google Calendar
+    ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
+      const item = currentItem;
+      return runGoogleCalendar({
+        operation: ${JSON.stringify(operation)},
+        calendarId: String(${calExpr} ?? 'primary'),
+        ...( ${eventIdExpr} !== undefined ? { eventId: String(${eventIdExpr}) } : {}),
+        ...( ${summaryExpr} !== undefined ? { summary: String(${summaryExpr}) } : {}),
+        ...( ${startExpr} !== undefined ? { start: String(${startExpr}) } : {}),
+        ...( ${endExpr} !== undefined ? { end: String(${endExpr}) } : {}),
+        ...( ${descExpr} !== undefined ? { description: String(${descExpr}) } : {}),
+      });
+    }));
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`);
+    }
+    static mapEvolutionApiNode(ctx) {
+      const params = ctx.node.parameters || {};
+      const prevVar = ctx.previousVariableName || "inputItems";
+      const resource = params.resource || "messages-api";
+      const operation = params.operation || "sendText";
+      const instanceExpr = params.instanceName ? ExpressionParser.parse(params.instanceName) : "undefined";
+      const remoteJidExpr = ExpressionParser.parse(params.remoteJid || params.number || "");
+      const textExpr = ExpressionParser.parse(params.messageText || params.text || params.caption || "");
+      const mediaExpr = params.media ? ExpressionParser.parse(params.media) : "undefined";
+      const messageIdExpr = params.messageId ? ExpressionParser.parse(params.messageId) : "undefined";
+      return this.wrapContinueOnError(ctx, `
+    // [Node: ${ctx.node.name}] Evolution API
+    ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
+      const item = currentItem;
+      return runEvolutionApi({
+        resource: ${JSON.stringify(resource)},
+        operation: ${JSON.stringify(operation)},
+        ...( ${instanceExpr} !== undefined ? { instanceName: String(${instanceExpr}) } : {}),
+        remoteJid: String(${remoteJidExpr} ?? ''),
+        messageText: String(${textExpr} ?? ''),
+        ...( ${mediaExpr} !== undefined ? { mediaUrl: String(${mediaExpr}) } : {}),
+        ...( ${messageIdExpr} !== undefined ? { messageId: String(${messageIdExpr}) } : {}),
+      });
+    }));
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`);
     }
     static mapGenericNode(ctx, label) {
       const prevVar = ctx.previousVariableName || "inputItems";
@@ -1913,13 +2053,28 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
 ` : "";
       const llmImport = wf.nodes.some((node) => ["openAi", "lmChatOpenAi", "anthropic", "lmChatAnthropic", "googleGemini", "lmChatGoogleGemini", "groq", "lmChatGroq", "chainLlm"].some((suffix) => node.type.includes(suffix))) ? `import { runLlmCompletion } from '${runtimePrefix}/llm';
 ` : "";
+      const integrationImports = new Set;
+      if (wf.nodes.some((node) => node.type === "n8n-nodes-base.extractFromFile")) {
+        integrationImports.add("extractFromFileItem");
+      }
+      if (wf.nodes.some((node) => node.type === "n8n-nodes-base.emailSend")) {
+        integrationImports.add("sendEmailItem");
+      }
+      if (wf.nodes.some((node) => node.type === "n8n-nodes-base.googleCalendar")) {
+        integrationImports.add("runGoogleCalendar");
+      }
+      if (wf.nodes.some((node) => node.type === "n8n-nodes-evolution-api.evolutionApi")) {
+        integrationImports.add("runEvolutionApi");
+      }
+      const integrationsImport = integrationImports.size > 0 ? `import { ${[...integrationImports].join(", ")} } from '${runtimePrefix}/integrations';
+` : "";
       const retryNodes = wf.nodes.filter((node) => !node.disabled && usesNodeRetry(node));
       const retryImport = retryNodes.length > 0 ? `import { runWithNodeRetry${retryNodes.some((node) => node.type === "n8n-nodes-base.httpRequest") ? ", settleRetryRequests" : ""} } from '${runtimePrefix}/node-retry';
 ` : "";
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${retryImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}${llmImport}
+${retryImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}${llmImport}${integrationsImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({

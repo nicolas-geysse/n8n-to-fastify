@@ -44,7 +44,15 @@ const supportedNodeTypes = new Set([
     'postgres',
     'wait',
     'noOp',
+    'manualTrigger',
+    'cron',
+    'scheduleTrigger',
+    'extractFromFile',
+    'emailSend',
+    'googleCalendar',
+    'splitInBatches',
   ].map(type => `n8n-nodes-base.${type}`),
+  'n8n-nodes-evolution-api.evolutionApi',
   ...['openAi', 'lmChatOpenAi', 'anthropic', 'lmChatAnthropic', 'googleGemini', 'lmChatGoogleGemini', 'groq', 'lmChatGroq', 'chainLlm'].map(
     type => `@n8n/n8n-nodes-langchain.${type}`,
   ),
@@ -82,8 +90,29 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     if (node.retryOnFail && !usesNodeRetry(node)) {
       report(node.name, 'retryOnFail is only supported for HTTP Request and S3 Download nodes');
     }
-    if (node.onError && node.onError !== 'stopWorkflow' &&
-        !continuesCodeOnRegularOutput(node) && !continuesSwitchOnRegularOutput(node)) {
+    const continueOnErrorActionTypes = [
+      'n8n-nodes-base.postgres',
+      'n8n-nodes-base.extractFromFile',
+      'n8n-nodes-base.emailSend',
+      'n8n-nodes-base.googleCalendar',
+      'n8n-nodes-evolution-api.evolutionApi',
+      'openAi',
+      'lmChatOpenAi',
+      'anthropic',
+      'lmChatAnthropic',
+      'googleGemini',
+      'lmChatGoogleGemini',
+      'groq',
+      'lmChatGroq',
+      'chainLlm',
+    ];
+    const supportsContinueOnError =
+      continuesCodeOnRegularOutput(node) ||
+      continuesSwitchOnRegularOutput(node) ||
+      ((node.onError === 'continueRegularOutput' || node.onError === 'continueErrorOutput') &&
+        continueOnErrorActionTypes.some(t => node.type === t || node.type.includes(t)));
+
+    if (node.onError && node.onError !== 'stopWorkflow' && !supportsContinueOnError) {
       report(node.name, 'the configured onError behavior is ignored');
     }
     if (node.type === rabbitMqPublisherType) {

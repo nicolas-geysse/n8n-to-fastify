@@ -88,9 +88,9 @@ export class CoreWorkflowParser {
       (node) =>
         node.type === rabbitMqTriggerType ||
         node.type === postgresTriggerType ||
-        node.type.includes('webhook') ||
-        node.type.includes('trigger') ||
-        node.type.includes('cron')
+        (node.type.toLowerCase().includes('webhook') && !node.type.includes('respondToWebhook')) ||
+        (node.type.toLowerCase().includes('trigger') && !node.type.includes('executeWorkflowTrigger')) ||
+        node.type.toLowerCase().includes('cron')
     );
     const triggerNames = new Set(triggers.map((t) => t.name));
 

@@ -366,6 +366,144 @@ describe('Node I/O Contracts', () => {
     }
   });
 
+  test('extractFromFile, emailSend, googleCalendar, evolutionApi, manualTrigger, and cron contracts', async () => {
+    const originalFetch = globalThis.fetch;
+    const priorEmailHook = process.env.EMAIL_WEBHOOK_URL;
+    const priorGcal = process.env.GOOGLE_CALENDAR_ACCESS_TOKEN;
+    const priorEvoUrl = process.env.EVOLUTION_API_URL;
+    const priorEvoKey = process.env.EVOLUTION_API_KEY;
+    process.env.EMAIL_WEBHOOK_URL = 'https://email-hook.invalid/send';
+    process.env.GOOGLE_CALENDAR_ACCESS_TOKEN = 'gcal-token';
+    process.env.EVOLUTION_API_URL = 'https://evo.invalid';
+    process.env.EVOLUTION_API_KEY = 'evo-key';
+
+    try {
+      const { dir, out, res } = compileWorkflow('integrations_pack', {
+        nodes: [
+          { name: 'Start', type: 'n8n-nodes-base.manualTrigger', typeVersion: 1, parameters: {} },
+          {
+            name: 'Extract',
+            type: 'n8n-nodes-base.extractFromFile',
+            typeVersion: 1,
+            parameters: { operation: 'binaryToPropery', binaryPropertyName: 'doc', destinationKey: 'b64' },
+          },
+          {
+            name: 'Email',
+            type: 'n8n-nodes-base.emailSend',
+            typeVersion: 2,
+            parameters: { toEmail: 'dev@example.com', subject: 'Hi', text: 'Body' },
+          },
+          {
+            name: 'Calendar',
+            type: 'n8n-nodes-base.googleCalendar',
+            typeVersion: 1,
+            parameters: { operation: 'create', calendar: 'primary', summary: 'Sync' },
+          },
+          {
+            name: 'WhatsApp',
+            type: 'n8n-nodes-evolution-api.evolutionApi',
+            typeVersion: 1,
+            parameters: { operation: 'sendText', remoteJid: '5562999999999', messageText: 'Oi' },
+          },
+        ],
+        connections: {
+          Start: { main: [[{ node: 'Extract', type: 'main', index: 0 }]] },
+          Extract: { main: [[{ node: 'Email', type: 'main', index: 0 }]] },
+          Email: { main: [[{ node: 'Calendar', type: 'main', index: 0 }]] },
+          Calendar: { main: [[{ node: 'WhatsApp', type: 'main', index: 0 }]] },
+        },
+      });
+      try {
+        expect(res.exitCode).toBe(0);
+        const { workflow_integrations_pack } = await import(path.join(out, 'workflows', 'integrations_pack.ts'));
+        const calls: string[] = [];
+        globalThis.fetch = (async (url) => {
+          calls.push(String(url));
+          return Response.json({ ok: true, id: '123' });
+        }) as unknown as typeof fetch;
+
+        const outItems = await workflow_integrations_pack([{
+          json: { ok: true },
+          binary: { doc: { data: Buffer.from('hello').toString('base64') } },
+        }]);
+        expect(calls).toEqual([
+          'https://email-hook.invalid/send',
+          'https://www.googleapis.com/calendar/v3/calendars/primary/events',
+          'https://evo.invalid/message/sendText/default',
+        ]);
+        expect(outItems.items[0].json).toEqual({ ok: true, id: '123' });
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (priorEmailHook === undefined) delete process.env.EMAIL_WEBHOOK_URL;
+      else process.env.EMAIL_WEBHOOK_URL = priorEmailHook;
+      if (priorGcal === undefined) delete process.env.GOOGLE_CALENDAR_ACCESS_TOKEN;
+      else process.env.GOOGLE_CALENDAR_ACCESS_TOKEN = priorGcal;
+      if (priorEvoUrl === undefined) delete process.env.EVOLUTION_API_URL;
+      else process.env.EVOLUTION_API_URL = priorEvoUrl;
+      if (priorEvoKey === undefined) delete process.env.EVOLUTION_API_KEY;
+      else process.env.EVOLUTION_API_KEY = priorEvoKey;
+    }
+  });
+
+  test('LLM retryOnFail and Postgres continueRegularOutput handle transient failures', async () => {
+    const originalFetch = globalThis.fetch;
+    const priorKey = process.env.GEMINI_API_KEY;
+    const priorDb = process.env.DATABASE_URL;
+    process.env.GEMINI_API_KEY = 'gem-retry-key';
+    delete process.env.DATABASE_URL;
+
+    try {
+      const { dir, out, res } = compileWorkflow('llm_retry_pg_err', {
+        nodes: [
+          {
+            name: 'GeminiRetry',
+            type: '@n8n/n8n-nodes-langchain.googleGemini',
+            typeVersion: 1,
+            retryOnFail: true,
+            maxTries: 2,
+            waitBetweenTries: 0,
+            parameters: { model: 'gemini-2.5-flash', prompt: 'Hi' },
+          },
+          {
+            name: 'PgSafe',
+            type: 'n8n-nodes-base.postgres',
+            typeVersion: 2,
+            onError: 'continueRegularOutput',
+            parameters: { query: 'SELECT 1;' },
+          },
+        ],
+        connections: {
+          GeminiRetry: { main: [[{ node: 'PgSafe', type: 'main', index: 0 }]] },
+        },
+      });
+      try {
+        expect(res.exitCode).toBe(0);
+        const { workflow_llm_retry_pg_err } = await import(path.join(out, 'workflows', 'llm_retry_pg_err.ts'));
+        let attempts = 0;
+        globalThis.fetch = (async () => {
+          attempts++;
+          if (attempts === 1) return new Response('Rate limit', { status: 429 });
+          return Response.json({ candidates: [{ content: { parts: [{ text: 'Recovered' }] } }] });
+        }) as unknown as typeof fetch;
+
+        const outItems = await workflow_llm_retry_pg_err([{ json: {} }]);
+        expect(attempts).toBe(2);
+        expect(outItems.items[0].json.error).toContain('DATABASE_URL');
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (priorKey === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = priorKey;
+      if (priorDb === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = priorDb;
+    }
+  });
+
   test('strict mode rejects unsupported retryOnFail nodes and non-v1 noOp', () => {
     const { dir, res } = compileWorkflow('strict_contracts', {
       nodes: [

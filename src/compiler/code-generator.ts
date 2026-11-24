@@ -95,6 +95,22 @@ export class CodeGenerator {
     )
       ? `import { runLlmCompletion } from '${runtimePrefix}/llm';\n`
       : '';
+    const integrationImports = new Set<string>();
+    if (wf.nodes.some(node => node.type === 'n8n-nodes-base.extractFromFile')) {
+      integrationImports.add('extractFromFileItem');
+    }
+    if (wf.nodes.some(node => node.type === 'n8n-nodes-base.emailSend')) {
+      integrationImports.add('sendEmailItem');
+    }
+    if (wf.nodes.some(node => node.type === 'n8n-nodes-base.googleCalendar')) {
+      integrationImports.add('runGoogleCalendar');
+    }
+    if (wf.nodes.some(node => node.type === 'n8n-nodes-evolution-api.evolutionApi')) {
+      integrationImports.add('runEvolutionApi');
+    }
+    const integrationsImport = integrationImports.size > 0
+      ? `import { ${[...integrationImports].join(', ')} } from '${runtimePrefix}/integrations';\n`
+      : '';
 
     const retryNodes = wf.nodes.filter(node => !node.disabled && usesNodeRetry(node));
     const retryImport = retryNodes.length > 0
@@ -104,7 +120,7 @@ export class CodeGenerator {
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${retryImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}${llmImport}
+${retryImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}${llmImport}${integrationsImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({

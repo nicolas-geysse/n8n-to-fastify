@@ -120,6 +120,30 @@ export class NodeMappers {
       return this.mapGenericNode(ctx, 'No Operation');
     }
 
+    if (type === 'n8n-nodes-base.manualTrigger' || type === 'n8n-nodes-base.cron' || type === 'n8n-nodes-base.scheduleTrigger') {
+      return this.mapGenericNode(ctx, `Trigger (${type})`);
+    }
+
+    if (type === 'n8n-nodes-base.splitInBatches') {
+      return this.mapGenericNode(ctx, 'Split In Batches');
+    }
+
+    if (type === 'n8n-nodes-base.extractFromFile') {
+      return this.mapExtractFromFileNode(ctx);
+    }
+
+    if (type === 'n8n-nodes-base.emailSend') {
+      return this.mapEmailSendNode(ctx);
+    }
+
+    if (type === 'n8n-nodes-base.googleCalendar') {
+      return this.mapGoogleCalendarNode(ctx);
+    }
+
+    if (type === 'n8n-nodes-evolution-api.evolutionApi') {
+      return this.mapEvolutionApiNode(ctx);
+    }
+
     return this.mapGenericNode(ctx, `Unmapped Node (${type})`);
   }
 
@@ -694,12 +718,25 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
     }`;
   }
 
+  private static wrapContinueOnError(ctx: NodeMapperContext, body: string): string {
+    if (ctx.node.onError !== 'continueRegularOutput' && ctx.node.onError !== 'continueErrorOutput') {
+      return body;
+    }
+    return `
+    try {${body}
+    } catch (error) {
+      ${ctx.variableName} = [{ json: { error: error instanceof Error ? error.message : String(error) } }];
+      item = ${ctx.variableName}[0];
+      ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});
+    }`;
+  }
+
   private static mapPostgresNode(ctx: NodeMapperContext): string {
     const params = ctx.node.parameters || {};
     const prevVar = ctx.previousVariableName || 'inputItems';
     const queryExpr = ExpressionParser.parse(params.query || 'SELECT 1;');
 
-    return `
+    return this.wrapContinueOnError(ctx, `
     // [Node: ${ctx.node.name}] PostgreSQL Query (via DATABASE_URL env var)
     ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
       const item = currentItem;
@@ -720,7 +757,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       return { json: { ...currentItem.json, _sqlPrepared: sql } };
     }));
     item = ${ctx.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`);
   }
 
   private static mapLlmNode(ctx: NodeMapperContext): string {
@@ -753,9 +790,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
     const temperature = params.options?.temperature ?? params.temperature;
     const maxTokens = params.options?.maxTokens ?? params.options?.maxTokensToSample ?? params.maxTokens;
 
-    return `
-    // [Node: ${ctx.node.name}] Native LLM Completion (${provider})
-    ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
+    const batchCall = `Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
       const item = currentItem;
       const prompt = String(${promptExpr} ?? '');
       const system = ${systemExpr};
@@ -768,9 +803,119 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
         ...(typeof ${JSON.stringify(maxTokens)} === 'number' ? { maxTokens: ${JSON.stringify(maxTokens)} } : {}),
       });
       return { json: { text: result.text, model: result.model, usage: result.usage } };
+    }))`;
+
+    return this.wrapContinueOnError(ctx, `
+    // [Node: ${ctx.node.name}] Native LLM Completion (${provider})
+    ${ctx.variableName} = await ${withNodeRetry(ctx.node, batchCall)};
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`);
+  }
+
+  private static mapExtractFromFileNode(ctx: NodeMapperContext): string {
+    const params = ctx.node.parameters || {};
+    const prevVar = ctx.previousVariableName || 'inputItems';
+    const operation = params.operation || 'binaryToPropery';
+    const binaryPropertyName = ExpressionParser.parse(params.binaryPropertyName || 'data');
+    const destinationKey = ExpressionParser.parse(params.destinationKey || 'data');
+
+    return this.wrapContinueOnError(ctx, `
+    // [Node: ${ctx.node.name}] Extract From File
+    ${ctx.variableName} = (${prevVar} || inputItems).map((currentItem: N8nItem) => {
+      const item = currentItem;
+      return extractFromFileItem(
+        currentItem,
+        ${JSON.stringify(operation)},
+        String(${binaryPropertyName} ?? 'data'),
+        String(${destinationKey} ?? 'data'),
+      );
+    });
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`);
+  }
+
+  private static mapEmailSendNode(ctx: NodeMapperContext): string {
+    const params = ctx.node.parameters || {};
+    const prevVar = ctx.previousVariableName || 'inputItems';
+    const fromExpr = params.fromEmail ? ExpressionParser.parse(params.fromEmail) : 'undefined';
+    const toExpr = ExpressionParser.parse(params.toEmail || '');
+    const subjectExpr = ExpressionParser.parse(params.subject || '');
+    const textExpr = params.text ? ExpressionParser.parse(params.text) : 'undefined';
+    const htmlExpr = params.html ? ExpressionParser.parse(params.html) : 'undefined';
+
+    return this.wrapContinueOnError(ctx, `
+    // [Node: ${ctx.node.name}] Send Email
+    ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
+      const item = currentItem;
+      return sendEmailItem({
+        ...( ${fromExpr} !== undefined ? { from: String(${fromExpr}) } : {}),
+        to: String(${toExpr} ?? ''),
+        subject: String(${subjectExpr} ?? ''),
+        ...( ${textExpr} !== undefined ? { text: String(${textExpr}) } : {}),
+        ...( ${htmlExpr} !== undefined ? { html: String(${htmlExpr}) } : {}),
+      });
     }));
     item = ${ctx.variableName}[0] || { json: {} };
-    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`);
+  }
+
+  private static mapGoogleCalendarNode(ctx: NodeMapperContext): string {
+    const params = ctx.node.parameters || {};
+    const prevVar = ctx.previousVariableName || 'inputItems';
+    const operation = params.operation || 'getAll';
+    const calendarId = typeof params.calendar === 'object' ? (params.calendar?.value || 'primary') : (params.calendar || 'primary');
+    const calExpr = ExpressionParser.parse(calendarId);
+    const eventIdExpr = params.eventId ? ExpressionParser.parse(params.eventId) : 'undefined';
+    const summaryExpr = params.summary ? ExpressionParser.parse(params.summary) : 'undefined';
+    const startExpr = params.start ? ExpressionParser.parse(params.start) : 'undefined';
+    const endExpr = params.end ? ExpressionParser.parse(params.end) : 'undefined';
+    const descExpr = params.additionalFields?.description ? ExpressionParser.parse(params.additionalFields.description) : 'undefined';
+
+    return this.wrapContinueOnError(ctx, `
+    // [Node: ${ctx.node.name}] Google Calendar
+    ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
+      const item = currentItem;
+      return runGoogleCalendar({
+        operation: ${JSON.stringify(operation)},
+        calendarId: String(${calExpr} ?? 'primary'),
+        ...( ${eventIdExpr} !== undefined ? { eventId: String(${eventIdExpr}) } : {}),
+        ...( ${summaryExpr} !== undefined ? { summary: String(${summaryExpr}) } : {}),
+        ...( ${startExpr} !== undefined ? { start: String(${startExpr}) } : {}),
+        ...( ${endExpr} !== undefined ? { end: String(${endExpr}) } : {}),
+        ...( ${descExpr} !== undefined ? { description: String(${descExpr}) } : {}),
+      });
+    }));
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`);
+  }
+
+  private static mapEvolutionApiNode(ctx: NodeMapperContext): string {
+    const params = ctx.node.parameters || {};
+    const prevVar = ctx.previousVariableName || 'inputItems';
+    const resource = params.resource || 'messages-api';
+    const operation = params.operation || 'sendText';
+    const instanceExpr = params.instanceName ? ExpressionParser.parse(params.instanceName) : 'undefined';
+    const remoteJidExpr = ExpressionParser.parse(params.remoteJid || params.number || '');
+    const textExpr = ExpressionParser.parse(params.messageText || params.text || params.caption || '');
+    const mediaExpr = params.media ? ExpressionParser.parse(params.media) : 'undefined';
+    const messageIdExpr = params.messageId ? ExpressionParser.parse(params.messageId) : 'undefined';
+
+    return this.wrapContinueOnError(ctx, `
+    // [Node: ${ctx.node.name}] Evolution API
+    ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
+      const item = currentItem;
+      return runEvolutionApi({
+        resource: ${JSON.stringify(resource)},
+        operation: ${JSON.stringify(operation)},
+        ...( ${instanceExpr} !== undefined ? { instanceName: String(${instanceExpr}) } : {}),
+        remoteJid: String(${remoteJidExpr} ?? ''),
+        messageText: String(${textExpr} ?? ''),
+        ...( ${mediaExpr} !== undefined ? { mediaUrl: String(${mediaExpr}) } : {}),
+        ...( ${messageIdExpr} !== undefined ? { messageId: String(${messageIdExpr}) } : {}),
+      });
+    }));
+    item = ${ctx.variableName}[0] || { json: {} };
+    ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`);
   }
 
   private static mapGenericNode(ctx: NodeMapperContext, label: string): string {
