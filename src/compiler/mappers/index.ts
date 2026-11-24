@@ -148,6 +148,12 @@ export class NodeMappers {
       ? `      const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});\n`
       : '';
 
+    const legacyItemsBinding = /\$items\b/.test(rawCode)
+      ? `      const $items = (nodeName?: string, outputIndex = 0, runIndex = -1) => nodeName === undefined
+        ? currentItems
+        : ctx.getNodeRunItems(nodeName, outputIndex, runIndex);\n`
+      : '';
+
     // Rewrite n8n sandbox globals to local runtime bindings
     const transformedCode = rawCode
       .replace(/\$input\.all\(\)/g, 'currentItems')
@@ -166,7 +172,7 @@ export class NodeMappers {
       };\n` : '';
     const itemsBinding = /\bitems\b/.test(rawCode) ? '      const items = currentItems;\n' : '';
     const runCode = `
-      const result = await (async () => {
+${legacyItemsBinding}      const result = await (async () => {
         ${transformedCode}
       })();
       return n8n.normalizeItems(result);`;
