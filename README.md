@@ -115,7 +115,7 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 | **S3** | Downloads files into binary items from an S3-compatible endpoint (with batch retry support) |
 | **Convert to File** | Converts all input items into a single UTF-8 JSON binary file |
 | **Compression** | Decompresses inline ZIP and GZIP binary fields with anti-Zip-Bomb & path-traversal limits |
-| **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
+| **OpenAI / Claude / Gemini / Groq LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, and `GROQ_API_KEY` |
 | **Wait** | In-process time intervals with version-specific defaults and runtime expressions |
 | **Stop and Error** | Stops an active workflow path with a message or structured error |
 

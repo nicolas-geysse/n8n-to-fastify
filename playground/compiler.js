@@ -1214,7 +1214,7 @@
       if (type.includes("postgres")) {
         return this.mapPostgresNode(ctx);
       }
-      if (type.includes("openAi") || type.includes("googleGemini") || type.includes("chainLlm")) {
+      if (type.includes("openAi") || type.includes("anthropic") || type.includes("googleGemini") || type.includes("groq") || type.includes("chainLlm") || type.includes("lmChat")) {
         return this.mapLlmNode(ctx);
       }
       if (type === waitNodeType) {
@@ -1746,33 +1746,41 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
     static mapLlmNode(ctx) {
       const params = ctx.node.parameters || {};
       const prevVar = ctx.previousVariableName || "inputItems";
-      const model = params.modelId?.value || params.model || "gpt-4o-mini";
+      const type = ctx.node.type;
+      let provider = "openai";
+      let defaultModel = "gpt-4o-mini";
+      if (type.includes("anthropic") || type.includes("Anthropic")) {
+        provider = "anthropic";
+        defaultModel = "claude-3-5-sonnet-latest";
+      } else if (type.includes("googleGemini") || type.includes("GoogleGemini")) {
+        provider = "gemini";
+        defaultModel = "gemini-2.5-flash";
+      } else if (type.includes("groq") || type.includes("Groq")) {
+        provider = "groq";
+        defaultModel = "llama-3.3-70b-versatile";
+      }
+      const model = params.modelId?.value || params.model?.value || params.model || defaultModel;
       const promptText = params.messages?.values?.[0]?.content || params.prompt || params.text || "Hello";
       const promptExpr = ExpressionParser.parse(promptText);
+      const systemMessage = params.options?.systemMessage ?? params.systemMessage;
+      const systemExpr = systemMessage ? ExpressionParser.parse(systemMessage) : "undefined";
+      const temperature = params.options?.temperature ?? params.temperature;
+      const maxTokens = params.options?.maxTokens ?? params.options?.maxTokensToSample ?? params.maxTokens;
       return `
-    // [Node: ${ctx.node.name}] Native LLM Completion (OpenAI-compatible REST API)
+    // [Node: ${ctx.node.name}] Native LLM Completion (${provider})
     ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (currentItem: N8nItem) => {
       const item = currentItem;
-      const apiKey = process.env.OPENAI_API_KEY || process.env.LLM_API_KEY || '';
-      const baseUrl = process.env.LLM_BASE_URL || 'https://api.openai.com/v1';
-      const prompt = ${promptExpr};
-      const res = await fetch(\`\${baseUrl}/chat/completions\`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': \`Bearer \${apiKey}\`
-        },
-        body: JSON.stringify({
-          model: ${JSON.stringify(model)},
-          messages: [{ role: 'user', content: String(prompt) }]
-        })
+      const prompt = String(${promptExpr} ?? '');
+      const system = ${systemExpr};
+      const result = await runLlmCompletion({
+        provider: ${JSON.stringify(provider)},
+        model: ${JSON.stringify(model)},
+        prompt,
+        ...(system !== undefined ? { systemMessage: String(system) } : {}),
+        ...(typeof ${JSON.stringify(temperature)} === 'number' ? { temperature: ${JSON.stringify(temperature)} } : {}),
+        ...(typeof ${JSON.stringify(maxTokens)} === 'number' ? { maxTokens: ${JSON.stringify(maxTokens)} } : {}),
       });
-      if (!res.ok) {
-        throw new Error(\`LLM Request failed with status \${res.status}\`);
-      }
-      const data: any = await res.json();
-      const text = data?.choices?.[0]?.message?.content || '';
-      return { json: { text, model: ${JSON.stringify(model)}, usage: data?.usage } };
+      return { json: { text: result.text, model: result.model, usage: result.usage } };
     }));
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
@@ -1903,13 +1911,15 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
 ` : "";
       const stopAndErrorImport = wf.nodes.some((node) => node.type === stopAndErrorType) ? `import { createWorkflowStopError } from '${runtimePrefix}/stop-and-error';
 ` : "";
+      const llmImport = wf.nodes.some((node) => ["openAi", "lmChatOpenAi", "anthropic", "lmChatAnthropic", "googleGemini", "lmChatGoogleGemini", "groq", "lmChatGroq", "chainLlm"].some((suffix) => node.type.includes(suffix))) ? `import { runLlmCompletion } from '${runtimePrefix}/llm';
+` : "";
       const retryNodes = wf.nodes.filter((node) => !node.disabled && usesNodeRetry(node));
       const retryImport = retryNodes.length > 0 ? `import { runWithNodeRetry${retryNodes.some((node) => node.type === "n8n-nodes-base.httpRequest") ? ", settleRetryRequests" : ""} } from '${runtimePrefix}/node-retry';
 ` : "";
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${retryImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
+${retryImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}${llmImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({

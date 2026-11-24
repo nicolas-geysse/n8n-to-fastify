@@ -45,7 +45,9 @@ const supportedNodeTypes = new Set([
     'wait',
     'noOp',
   ].map(type => `n8n-nodes-base.${type}`),
-  ...['openAi', 'googleGemini', 'chainLlm'].map(type => `@n8n/n8n-nodes-langchain.${type}`),
+  ...['openAi', 'lmChatOpenAi', 'anthropic', 'lmChatAnthropic', 'googleGemini', 'lmChatGoogleGemini', 'groq', 'lmChatGroq', 'chainLlm'].map(
+    type => `@n8n/n8n-nodes-langchain.${type}`,
+  ),
 ]);
 
 export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {

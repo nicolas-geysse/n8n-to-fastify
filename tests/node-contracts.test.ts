@@ -239,6 +239,133 @@ describe('Node I/O Contracts', () => {
     }
   });
 
+  test('Anthropic Claude, Google Gemini native API, and Groq use their native REST endpoints and headers', async () => {
+    const originalFetch = globalThis.fetch;
+    const priorOpenAi = process.env.OPENAI_API_KEY;
+    const priorAnthropic = process.env.ANTHROPIC_API_KEY;
+    const priorGemini = process.env.GEMINI_API_KEY;
+    const priorGroq = process.env.GROQ_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'ant-test-key';
+    process.env.GEMINI_API_KEY = 'gem-test-key';
+    process.env.GROQ_API_KEY = 'groq-test-key';
+
+    try {
+      // 1. Anthropic Claude
+      {
+        const { dir, out, res } = compileWorkflow('claude_native', {
+          nodes: [{
+            name: 'Claude',
+            type: '@n8n/n8n-nodes-langchain.anthropic',
+            typeVersion: 1,
+            parameters: {
+              model: 'claude-3-5-sonnet-latest',
+              prompt: 'Summarize {{ $json.topic }}',
+              options: { systemMessage: 'Be concise', temperature: 0.2, maxTokens: 256 },
+            },
+          }],
+        });
+        try {
+          expect(res.exitCode).toBe(0);
+          const { workflow_claude_native } = await import(path.join(out, 'workflows', 'claude_native.ts'));
+          globalThis.fetch = (async (url, init) => {
+            expect(String(url)).toBe('https://api.anthropic.com/v1/messages');
+            const headers = new Headers(init?.headers);
+            expect(headers.get('x-api-key')).toBe('ant-test-key');
+            expect(headers.get('anthropic-version')).toBe('2023-06-01');
+            const body = JSON.parse(String(init?.body));
+            expect(body.model).toBe('claude-3-5-sonnet-latest');
+            expect(body.system).toBe('Be concise');
+            expect(body.max_tokens).toBe(256);
+            return Response.json({
+              content: [{ type: 'text', text: 'Claude summary' }],
+              usage: { input_tokens: 5, output_tokens: 2 },
+            });
+          }) as unknown as typeof fetch;
+
+          const outItems = await workflow_claude_native([{ json: { topic: 'Fastify' } }]);
+          expect(outItems.items).toEqual([{
+            json: { text: 'Claude summary', model: 'claude-3-5-sonnet-latest', usage: { input_tokens: 5, output_tokens: 2 } },
+          }]);
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+
+      // 2. Google Gemini native API
+      {
+        const { dir, out, res } = compileWorkflow('gemini_native', {
+          nodes: [{
+            name: 'Gemini',
+            type: '@n8n/n8n-nodes-langchain.googleGemini',
+            typeVersion: 1,
+            parameters: { model: 'gemini-2.5-flash', prompt: 'Hello {{ $json.name }}' },
+          }],
+        });
+        try {
+          expect(res.exitCode).toBe(0);
+          const { workflow_gemini_native } = await import(path.join(out, 'workflows', 'gemini_native.ts'));
+          globalThis.fetch = (async (url, init) => {
+            expect(String(url)).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent');
+            expect(new Headers(init?.headers).get('x-goog-api-key')).toBe('gem-test-key');
+            return Response.json({
+              candidates: [{ content: { parts: [{ text: 'Gemini reply' }] } }],
+              usageMetadata: { totalTokenCount: 9 },
+            });
+          }) as unknown as typeof fetch;
+
+          const outItems = await workflow_gemini_native([{ json: { name: 'Ada' } }]);
+          expect(outItems.items).toEqual([{
+            json: { text: 'Gemini reply', model: 'gemini-2.5-flash', usage: { totalTokenCount: 9 } },
+          }]);
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+
+      // 3. Groq
+      {
+        const { dir, out, res } = compileWorkflow('groq_native', {
+          nodes: [{
+            name: 'Groq',
+            type: '@n8n/n8n-nodes-langchain.lmChatGroq',
+            typeVersion: 1,
+            parameters: { model: 'llama-3.3-70b-versatile', prompt: 'Ping {{ $json.id }}' },
+          }],
+        });
+        try {
+          expect(res.exitCode).toBe(0);
+          const { workflow_groq_native } = await import(path.join(out, 'workflows', 'groq_native.ts'));
+          globalThis.fetch = (async (url, init) => {
+            expect(String(url)).toBe('https://api.groq.com/openai/v1/chat/completions');
+            expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer groq-test-key');
+            return Response.json({
+              choices: [{ message: { content: 'Groq pong' } }],
+              usage: { total_tokens: 7 },
+            });
+          }) as unknown as typeof fetch;
+
+          const outItems = await workflow_groq_native([{ json: { id: 1 } }]);
+          expect(outItems.items).toEqual([{
+            json: { text: 'Groq pong', model: 'llama-3.3-70b-versatile', usage: { total_tokens: 7 } },
+          }]);
+        } finally {
+          rmSync(dir, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (priorOpenAi === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = priorOpenAi;
+      if (priorAnthropic === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = priorAnthropic;
+      if (priorGemini === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = priorGemini;
+      if (priorGroq === undefined) delete process.env.GROQ_API_KEY;
+      else process.env.GROQ_API_KEY = priorGroq;
+    }
+  });
+
   test('strict mode rejects unsupported retryOnFail nodes and non-v1 noOp', () => {
     const { dir, res } = compileWorkflow('strict_contracts', {
       nodes: [

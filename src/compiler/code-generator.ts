@@ -89,6 +89,12 @@ export class CodeGenerator {
     const stopAndErrorImport = wf.nodes.some(node => node.type === stopAndErrorType)
       ? `import { createWorkflowStopError } from '${runtimePrefix}/stop-and-error';\n`
       : '';
+    const llmImport = wf.nodes.some(node =>
+      ['openAi', 'lmChatOpenAi', 'anthropic', 'lmChatAnthropic', 'googleGemini', 'lmChatGoogleGemini', 'groq', 'lmChatGroq', 'chainLlm']
+        .some(suffix => node.type.includes(suffix))
+    )
+      ? `import { runLlmCompletion } from '${runtimePrefix}/llm';\n`
+      : '';
 
     const retryNodes = wf.nodes.filter(node => !node.disabled && usesNodeRetry(node));
     const retryImport = retryNodes.length > 0
@@ -98,7 +104,7 @@ export class CodeGenerator {
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${retryImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
+${retryImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}${llmImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({
