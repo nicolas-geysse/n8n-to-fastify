@@ -125,6 +125,8 @@ export class NodeMappers {
     let responseExpr = 'item?.json || {}';
     if (respondWith === 'allIncomingItems') {
       responseExpr = `${ctx.variableName}.map((i: any) => i.json)`;
+    } else if (respondWith === 'noData') {
+      responseExpr = "''";
     } else if (respondWith === 'json' && params.responseBody) {
       responseExpr = ExpressionParser.parse(params.responseBody);
     } else if (respondWith === 'text' && params.responseBody) {
@@ -743,6 +745,9 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
           messages: [{ role: 'user', content: String(prompt) }]
         })
       });
+      if (!res.ok) {
+        throw new Error(\`LLM Request failed with status \${res.status}\`);
+      }
       const data: any = await res.json();
       const text = data?.choices?.[0]?.message?.content || '';
       return { json: { text, model: ${JSON.stringify(model)}, usage: data?.usage } };
