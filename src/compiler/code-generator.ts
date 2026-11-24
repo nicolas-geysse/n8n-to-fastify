@@ -59,10 +59,30 @@ export class CodeGenerator {
     const jsonFileImport = wf.nodes.some(node => node.type === convertToFileType)
       ? `import { convertItemsToJsonFile } from '${runtimePrefix}/convert-to-json';\n`
       : '';
-    const httpRequestImport = wf.nodes.some(node =>
-      node.type.includes('httpRequest') &&
-      (usesMultipartBody(node.parameters) || usesJsonHeaders(node.parameters) || usesFileResponse(node.parameters))
-    ) ? `import { createRequestForm, parseRequestHeaders, readFileResponse } from '${runtimePrefix}/http-request';\n` : '';
+    const hasHttpRequest = wf.nodes.some(node => node.type.includes('httpRequest'));
+    const httpRequestImports = new Set<string>();
+    if (hasHttpRequest) {
+      httpRequestImports.add('fetchWithStatus');
+      httpRequestImports.add('createResponseTimeout');
+    }
+    if (wf.nodes.some(node => node.type.includes('httpRequest') && usesMultipartBody(node.parameters))) {
+      httpRequestImports.add('createRequestForm');
+    }
+    if (wf.nodes.some(node => node.type.includes('httpRequest') && usesJsonHeaders(node.parameters))) {
+      httpRequestImports.add('parseRequestHeaders');
+    }
+    if (wf.nodes.some(node => node.type.includes('httpRequest') && usesFileResponse(node.parameters))) {
+      httpRequestImports.add('readFileResponse');
+    }
+    if (wf.nodes.some(node =>
+      node.type.includes('httpRequest') && node.parameters?.jsonBody && !usesMultipartBody(node.parameters) &&
+      ['POST', 'PUT', 'PATCH'].includes((node.parameters.method ?? 'GET').toUpperCase())
+    )) {
+      httpRequestImports.add('encodeJsonRequestBody');
+    }
+    const httpRequestImport = httpRequestImports.size > 0
+      ? `import { ${[...httpRequestImports].join(', ')} } from '${runtimePrefix}/http-request';\n`
+      : '';
     const waitImport = wf.nodes.some(node => node.type === waitNodeType)
       ? `import { waitForInterval } from '${runtimePrefix}/wait-interval';\n`
       : '';
@@ -70,28 +90,15 @@ export class CodeGenerator {
       ? `import { createWorkflowStopError } from '${runtimePrefix}/stop-and-error';\n`
       : '';
 
-    const httpStatusImport = wf.nodes.some(node => node.type.includes('httpRequest'))
-      ? `import { fetchWithStatus } from '${runtimePrefix}/http-request';\n`
-      : '';
-
-    const httpTimeoutImport = wf.nodes.some(node => node.type.includes('httpRequest'))
-      ? `import { createResponseTimeout } from '${runtimePrefix}/http-request';\n`
-      : '';
-
-        const retryNodes = wf.nodes.filter(node => !node.disabled && usesNodeRetry(node));
+    const retryNodes = wf.nodes.filter(node => !node.disabled && usesNodeRetry(node));
     const retryImport = retryNodes.length > 0
       ? `import { runWithNodeRetry${retryNodes.some(node => node.type === 'n8n-nodes-base.httpRequest') ? ', settleRetryRequests' : ''} } from '${runtimePrefix}/node-retry';\n`
       : '';
 
-    const jsonBodyImport = wf.nodes.some(node =>
-      node.type.includes('httpRequest') && node.parameters?.jsonBody && !usesMultipartBody(node.parameters) &&
-      ['POST', 'PUT', 'PATCH'].includes((node.parameters.method ?? 'GET').toUpperCase())
-    ) ? `import { encodeJsonRequestBody } from '${runtimePrefix}/http-request';\n` : '';
-
     const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${jsonBodyImport}${httpStatusImport}${retryImport}${httpTimeoutImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
+${retryImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({

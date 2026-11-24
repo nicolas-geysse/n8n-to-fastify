@@ -77,6 +77,9 @@ export function getCompatibilityIssues(workflow: ParsedWorkflow): string[] {
     if (node.continueOnFail) {
       report(node.name, 'legacy continueOnFail is ignored');
     }
+    if (node.retryOnFail && !usesNodeRetry(node)) {
+      report(node.name, 'retryOnFail is only supported for HTTP Request and S3 Download nodes');
+    }
     if (node.onError && node.onError !== 'stopWorkflow' &&
         !continuesCodeOnRegularOutput(node) && !continuesSwitchOnRegularOutput(node)) {
       report(node.name, 'the configured onError behavior is ignored');

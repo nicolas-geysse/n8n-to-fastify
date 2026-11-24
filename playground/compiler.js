@@ -502,22 +502,209 @@
     static rewriteBinaryReferences(code) {
       if (!code.includes("$binary"))
         return code;
-      const protectedLiterals = [];
-      let cleanCode = code.replace(/(["'])(?:\\(?:\r\n|[\s\S])|(?!\1)[^\\\r\n])*\1|`(?:\\[\s\S]|[^`\\])*`|\/(?![*\/])(?:\\.|\[(?:\\.|[^\]\\])*\]|[^\/\\\r\n])+\/[gimuy]*/g, (match) => {
-        const token = `__LITERAL_PROTECTED_${protectedLiterals.length}__`;
-        protectedLiterals.push(match);
-        return token;
-      });
-      cleanCode = cleanCode.replace(/(?<![.\w$])\$binary((?:\.[a-zA-Z0-9_]+|\[[^\]]+\])*)/g, (_, accessors) => {
-        if (!accessors)
-          return "item?.binary";
-        const safeAccessors = accessors.replace(/\.([a-zA-Z0-9_]+)/g, "?.$1").replace(/(\??\.?\[)/g, "?.[");
-        return `item?.binary${safeAccessors.startsWith("?.") ? "" : "?."}${safeAccessors}`;
-      });
-      protectedLiterals.forEach((lit, idx) => {
-        cleanCode = cleanCode.replace(`__LITERAL_PROTECTED_${idx}__`, lit);
-      });
-      return cleanCode;
+      let out = "";
+      let i = 0;
+      const len = code.length;
+      const templateBraceStack = [];
+      const isIdentChar = (ch) => /[a-zA-Z0-9_$]/.test(ch);
+      const skipWs = (pos) => {
+        while (pos < len && /\s/.test(code[pos]))
+          pos++;
+        return pos;
+      };
+      const prevNonWsChar = (str) => {
+        for (let p = str.length - 1;p >= 0; p--) {
+          if (!/\s/.test(str[p]))
+            return str[p];
+        }
+        return "";
+      };
+      while (i < len) {
+        const ch = code[i];
+        if (ch === "/" && code[i + 1] === "/") {
+          const end = code.indexOf(`
+`, i);
+          const sliceEnd = end === -1 ? len : end + 1;
+          out += code.slice(i, sliceEnd);
+          i = sliceEnd;
+          continue;
+        }
+        if (ch === "/" && code[i + 1] === "*") {
+          const end = code.indexOf("*/", i + 2);
+          const sliceEnd = end === -1 ? len : end + 2;
+          out += code.slice(i, sliceEnd);
+          i = sliceEnd;
+          continue;
+        }
+        if (ch === "'" || ch === '"') {
+          const quote = ch;
+          let j = i + 1;
+          while (j < len) {
+            if (code[j] === "\\") {
+              j += 2;
+              continue;
+            }
+            if (code[j] === quote) {
+              j++;
+              break;
+            }
+            j++;
+          }
+          out += code.slice(i, j);
+          i = j;
+          continue;
+        }
+        if (ch === "`") {
+          out += "`";
+          i++;
+          while (i < len) {
+            if (code[i] === "\\") {
+              out += code.slice(i, i + 2);
+              i += 2;
+              continue;
+            }
+            if (code[i] === "$" && code[i + 1] === "{") {
+              out += "${";
+              i += 2;
+              templateBraceStack.push(1);
+              break;
+            }
+            if (code[i] === "`") {
+              out += "`";
+              i++;
+              break;
+            }
+            out += code[i];
+            i++;
+          }
+          continue;
+        }
+        if (templateBraceStack.length > 0) {
+          if (ch === "{") {
+            templateBraceStack[templateBraceStack.length - 1]++;
+          } else if (ch === "}") {
+            templateBraceStack[templateBraceStack.length - 1]--;
+            if (templateBraceStack[templateBraceStack.length - 1] === 0) {
+              templateBraceStack.pop();
+              out += "}";
+              i++;
+              while (i < len) {
+                if (code[i] === "\\") {
+                  out += code.slice(i, i + 2);
+                  i += 2;
+                  continue;
+                }
+                if (code[i] === "$" && code[i + 1] === "{") {
+                  out += "${";
+                  i += 2;
+                  templateBraceStack.push(1);
+                  break;
+                }
+                if (code[i] === "`") {
+                  out += "`";
+                  i++;
+                  break;
+                }
+                out += code[i];
+                i++;
+              }
+              continue;
+            }
+          }
+        }
+        if (ch === "/") {
+          const prev = prevNonWsChar(out);
+          const canStartRegex = !prev || "({[,;=!&|?:~+-*%^<>".includes(prev);
+          if (canStartRegex) {
+            let j = i + 1;
+            let inClass = false;
+            while (j < len) {
+              if (code[j] === "\\") {
+                j += 2;
+                continue;
+              }
+              if (code[j] === "[")
+                inClass = true;
+              else if (code[j] === "]")
+                inClass = false;
+              else if (code[j] === "/" && !inClass) {
+                j++;
+                while (j < len && /[gimsuvy]/.test(code[j]))
+                  j++;
+                break;
+              }
+              j++;
+            }
+            out += code.slice(i, j);
+            i = j;
+            continue;
+          }
+        }
+        if (code.startsWith("$binary", i) && (i === 0 || !isIdentChar(code[i - 1])) && (i + 7 >= len || !isIdentChar(code[i + 7]))) {
+          const prev = prevNonWsChar(out);
+          const afterPos = skipWs(i + 7);
+          const next = code[afterPos] ?? "";
+          if (prev === ".") {
+            out += "$binary";
+            i += 7;
+            continue;
+          }
+          const isObjectEntry = prev === "{" || prev === ",";
+          if (isObjectEntry && next === ":") {
+            out += "$binary";
+            i += 7;
+            continue;
+          }
+          if (isObjectEntry && (next === "," || next === "}")) {
+            out += "$binary: item?.binary";
+            i += 7;
+            continue;
+          }
+          out += "item?.binary";
+          i += 7;
+          while (i < len) {
+            if (code[i] === "?" && code[i + 1] === ".") {
+              i += 2;
+              if (code[i] === "[") {
+                out += "?.[";
+                i++;
+                break;
+              }
+              const start = i;
+              while (i < len && /[a-zA-Z0-9_$]/.test(code[i]))
+                i++;
+              if (i > start) {
+                out += "?." + code.slice(start, i);
+                continue;
+              }
+              out += "?.";
+              break;
+            }
+            if (code[i] === ".") {
+              const start = i + 1;
+              let end = start;
+              while (end < len && /[a-zA-Z0-9_$]/.test(code[end]))
+                end++;
+              if (end > start) {
+                out += "?." + code.slice(start, end);
+                i = end;
+                continue;
+              }
+              break;
+            }
+            if (code[i] === "[") {
+              out += "?.[";
+              i++;
+              break;
+            }
+            break;
+          }
+          continue;
+        }
+        out += ch;
+        i++;
+      }
+      return out;
     }
   }
 
@@ -1687,25 +1874,37 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
 ` : "";
       const jsonFileImport = wf.nodes.some((node) => node.type === convertToFileType) ? `import { convertItemsToJsonFile } from '${runtimePrefix}/convert-to-json';
 ` : "";
-      const httpRequestImport = wf.nodes.some((node) => node.type.includes("httpRequest") && (usesMultipartBody(node.parameters) || usesJsonHeaders(node.parameters) || usesFileResponse(node.parameters))) ? `import { createRequestForm, parseRequestHeaders, readFileResponse } from '${runtimePrefix}/http-request';
+      const hasHttpRequest = wf.nodes.some((node) => node.type.includes("httpRequest"));
+      const httpRequestImports = new Set;
+      if (hasHttpRequest) {
+        httpRequestImports.add("fetchWithStatus");
+        httpRequestImports.add("createResponseTimeout");
+      }
+      if (wf.nodes.some((node) => node.type.includes("httpRequest") && usesMultipartBody(node.parameters))) {
+        httpRequestImports.add("createRequestForm");
+      }
+      if (wf.nodes.some((node) => node.type.includes("httpRequest") && usesJsonHeaders(node.parameters))) {
+        httpRequestImports.add("parseRequestHeaders");
+      }
+      if (wf.nodes.some((node) => node.type.includes("httpRequest") && usesFileResponse(node.parameters))) {
+        httpRequestImports.add("readFileResponse");
+      }
+      if (wf.nodes.some((node) => node.type.includes("httpRequest") && node.parameters?.jsonBody && !usesMultipartBody(node.parameters) && ["POST", "PUT", "PATCH"].includes((node.parameters.method ?? "GET").toUpperCase()))) {
+        httpRequestImports.add("encodeJsonRequestBody");
+      }
+      const httpRequestImport = httpRequestImports.size > 0 ? `import { ${[...httpRequestImports].join(", ")} } from '${runtimePrefix}/http-request';
 ` : "";
       const waitImport = wf.nodes.some((node) => node.type === waitNodeType) ? `import { waitForInterval } from '${runtimePrefix}/wait-interval';
 ` : "";
       const stopAndErrorImport = wf.nodes.some((node) => node.type === stopAndErrorType) ? `import { createWorkflowStopError } from '${runtimePrefix}/stop-and-error';
 ` : "";
-      const httpStatusImport = wf.nodes.some((node) => node.type.includes("httpRequest")) ? `import { fetchWithStatus } from '${runtimePrefix}/http-request';
-` : "";
-      const httpTimeoutImport = wf.nodes.some((node) => node.type.includes("httpRequest")) ? `import { createResponseTimeout } from '${runtimePrefix}/http-request';
-` : "";
       const retryNodes = wf.nodes.filter((node) => !node.disabled && usesNodeRetry(node));
       const retryImport = retryNodes.length > 0 ? `import { runWithNodeRetry${retryNodes.some((node) => node.type === "n8n-nodes-base.httpRequest") ? ", settleRetryRequests" : ""} } from '${runtimePrefix}/node-retry';
-` : "";
-      const jsonBodyImport = wf.nodes.some((node) => node.type.includes("httpRequest") && node.parameters?.jsonBody && !usesMultipartBody(node.parameters) && ["POST", "PUT", "PATCH"].includes((node.parameters.method ?? "GET").toUpperCase())) ? `import { encodeJsonRequestBody } from '${runtimePrefix}/http-request';
 ` : "";
       const imports = `import { WorkflowContext } from '${runtimePrefix}/workflow-context';
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
-${jsonBodyImport}${httpStatusImport}${retryImport}${httpTimeoutImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
+${retryImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
 ${legacyNames}
 const DateTime = {
   now: () => ({

@@ -100,34 +100,228 @@ export class ExpressionParser {
   /**
    * Rewrites $binary expressions (e.g. $binary.data.fileName or $binary["key"]?.mimeType)
    * to safe optional chaining (e.g. item?.binary?.data?.fileName or item?.binary?.["key"]?.mimeType)
-   * using native string parsing without external dependencies like js-tokens.
+   * using a single-pass lexical scanner without external dependencies.
    */
   private static rewriteBinaryReferences(code: string): string {
     if (!code.includes('$binary')) return code;
 
-    // Tokenize strings, template literals, and regexes to protect them from replacement
-    const protectedLiterals: string[] = [];
-    let cleanCode = code.replace(/(["'])(?:\\(?:\r\n|[\s\S])|(?!\1)[^\\\r\n])*\1|`(?:\\[\s\S]|[^`\\])*`|\/(?![*\/])(?:\\.|\[(?:\\.|[^\]\\])*\]|[^\/\\\r\n])+\/[gimuy]*/g, (match) => {
-      const token = `__LITERAL_PROTECTED_${protectedLiterals.length}__`;
-      protectedLiterals.push(match);
-      return token;
-    });
+    let out = '';
+    let i = 0;
+    const len = code.length;
+    // Tracks brace nesting inside template literal `${...}` expressions.
+    const templateBraceStack: number[] = [];
 
-    // 1. $binary.prop.sub -> item?.binary?.prop?.sub
-    cleanCode = cleanCode.replace(/(?<![.\w$])\$binary((?:\.[a-zA-Z0-9_]+|\[[^\]]+\])*)/g, (_, accessors) => {
-      if (!accessors) return 'item?.binary';
-      // Convert .prop to ?.prop and [key] to ?.[key]
-      const safeAccessors = accessors
-        .replace(/\.([a-zA-Z0-9_]+)/g, '?.$1')
-        .replace(/(\??\.?\[)/g, '?.[');
-      return `item?.binary${safeAccessors.startsWith('?.') ? '' : '?.'}${safeAccessors}`;
-    });
+    const isIdentChar = (ch: string) => /[a-zA-Z0-9_$]/.test(ch);
+    const skipWs = (pos: number) => {
+      while (pos < len && /\s/.test(code[pos])) pos++;
+      return pos;
+    };
+    const prevNonWsChar = (str: string) => {
+      for (let p = str.length - 1; p >= 0; p--) {
+        if (!/\s/.test(str[p])) return str[p];
+      }
+      return '';
+    };
 
-    // Restore protected literals
-    protectedLiterals.forEach((lit, idx) => {
-      cleanCode = cleanCode.replace(`__LITERAL_PROTECTED_${idx}__`, lit);
-    });
+    while (i < len) {
+      const ch = code[i];
 
-    return cleanCode;
+      // Line comment
+      if (ch === '/' && code[i + 1] === '/') {
+        const end = code.indexOf('\n', i);
+        const sliceEnd = end === -1 ? len : end + 1;
+        out += code.slice(i, sliceEnd);
+        i = sliceEnd;
+        continue;
+      }
+
+      // Block comment
+      if (ch === '/' && code[i + 1] === '*') {
+        const end = code.indexOf('*/', i + 2);
+        const sliceEnd = end === -1 ? len : end + 2;
+        out += code.slice(i, sliceEnd);
+        i = sliceEnd;
+        continue;
+      }
+
+      // Single or double quoted string
+      if (ch === '\'' || ch === '"') {
+        const quote = ch;
+        let j = i + 1;
+        while (j < len) {
+          if (code[j] === '\\') { j += 2; continue; }
+          if (code[j] === quote) { j++; break; }
+          j++;
+        }
+        out += code.slice(i, j);
+        i = j;
+        continue;
+      }
+
+      // Template literal (scan static segments verbatim, recurse into ${...})
+      if (ch === '`') {
+        out += '`';
+        i++;
+        while (i < len) {
+          if (code[i] === '\\') {
+            out += code.slice(i, i + 2);
+            i += 2;
+            continue;
+          }
+          if (code[i] === '$' && code[i + 1] === '{') {
+            out += '${';
+            i += 2;
+            templateBraceStack.push(1);
+            break;
+          }
+          if (code[i] === '`') {
+            out += '`';
+            i++;
+            break;
+          }
+          out += code[i];
+          i++;
+        }
+        continue;
+      }
+
+      // Handle closing `}` of a template `${...}` interpolation
+      if (templateBraceStack.length > 0) {
+        if (ch === '{') {
+          templateBraceStack[templateBraceStack.length - 1]++;
+        } else if (ch === '}') {
+          templateBraceStack[templateBraceStack.length - 1]--;
+          if (templateBraceStack[templateBraceStack.length - 1] === 0) {
+            templateBraceStack.pop();
+            out += '}';
+            i++;
+            // Resume scanning remainder of template literal
+            while (i < len) {
+              if (code[i] === '\\') {
+                out += code.slice(i, i + 2);
+                i += 2;
+                continue;
+              }
+              if (code[i] === '$' && code[i + 1] === '{') {
+                out += '${';
+                i += 2;
+                templateBraceStack.push(1);
+                break;
+              }
+              if (code[i] === '`') {
+                out += '`';
+                i++;
+                break;
+              }
+              out += code[i];
+              i++;
+            }
+            continue;
+          }
+        }
+      }
+
+      // Regex literal heuristic: `/` preceded by operator/delimiter/start (not identifier/number/`)`/]`)
+      if (ch === '/') {
+        const prev = prevNonWsChar(out);
+        const canStartRegex = !prev || '({[,;=!&|?:~+-*%^<>'.includes(prev);
+        if (canStartRegex) {
+          let j = i + 1;
+          let inClass = false;
+          while (j < len) {
+            if (code[j] === '\\') { j += 2; continue; }
+            if (code[j] === '[') inClass = true;
+            else if (code[j] === ']') inClass = false;
+            else if (code[j] === '/' && !inClass) {
+              j++;
+              while (j < len && /[gimsuvy]/.test(code[j])) j++;
+              break;
+            }
+            j++;
+          }
+          out += code.slice(i, j);
+          i = j;
+          continue;
+        }
+      }
+
+      // Standalone `$binary` identifier
+      if (
+        code.startsWith('$binary', i) &&
+        (i === 0 || !isIdentChar(code[i - 1])) &&
+        (i + 7 >= len || !isIdentChar(code[i + 7]))
+      ) {
+        const prev = prevNonWsChar(out);
+        const afterPos = skipWs(i + 7);
+        const next = code[afterPos] ?? '';
+
+        // Property access on another object (e.g. `obj.$binary`)
+        if (prev === '.') {
+          out += '$binary';
+          i += 7;
+          continue;
+        }
+
+        const isObjectEntry = prev === '{' || prev === ',';
+        // Object literal key `{ $binary: ... }`
+        if (isObjectEntry && next === ':') {
+          out += '$binary';
+          i += 7;
+          continue;
+        }
+        // Object literal shorthand `{ $binary }`
+        if (isObjectEntry && (next === ',' || next === '}')) {
+          out += '$binary: item?.binary';
+          i += 7;
+          continue;
+        }
+
+        out += 'item?.binary';
+        i += 7;
+
+        // Rewrite chained `.prop` / `[key]` / `?.prop` / `?.[key]` accessors
+        while (i < len) {
+          if (code[i] === '?' && code[i + 1] === '.') {
+            i += 2;
+            if (code[i] === '[') {
+              out += '?.[';
+              i++;
+              break;
+            }
+            const start = i;
+            while (i < len && /[a-zA-Z0-9_$]/.test(code[i])) i++;
+            if (i > start) {
+              out += '?.' + code.slice(start, i);
+              continue;
+            }
+            out += '?.';
+            break;
+          }
+          if (code[i] === '.') {
+            const start = i + 1;
+            let end = start;
+            while (end < len && /[a-zA-Z0-9_$]/.test(code[end])) end++;
+            if (end > start) {
+              out += '?.' + code.slice(start, end);
+              i = end;
+              continue;
+            }
+            break;
+          }
+          if (code[i] === '[') {
+            out += '?.[';
+            i++;
+            break;
+          }
+          break;
+        }
+        continue;
+      }
+
+      out += ch;
+      i++;
+    }
+
+    return out;
   }
 }

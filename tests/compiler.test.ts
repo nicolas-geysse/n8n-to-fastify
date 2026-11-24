@@ -64,6 +64,9 @@ describe('ExpressionParser', () => {
   test('rewrites $binary metadata expressions natively without external dependencies', () => {
     expect(ExpressionParser.parse('={{ $binary.data.fileName }}')).toBe('(item?.binary?.data?.fileName)');
     expect(ExpressionParser.parse('={{ $binary["second"]?.mimeType }}')).toBe('(item?.binary?.["second"]?.mimeType)');
+    expect(ExpressionParser.parse('={{ ({ $binary: "property" }).$binary }}')).toBe('(({ $binary: "property" }).$binary)');
+    expect(ExpressionParser.parse('={{ ({ $binary }).$binary.data.fileName }}')).toBe('(({ $binary: item?.binary }).$binary.data.fileName)');
+    expect(ExpressionParser.parse('={{ `$binary:${$binary.data.fileName ?? "missing"}` }}')).toBe('(`$binary:${item?.binary?.data?.fileName ?? "missing"}`)');
   });
 });
 

@@ -40,15 +40,23 @@ export const n8n = {
   },
 
   /**
-   * Safely sets a nested property using dot notation (used by Set / Edit Fields).
+   * Safely sets a nested property using dot or numeric bracket notation (used by Set / Edit Fields).
+   * Guards against prototype pollution on __proto__, constructor, and prototype segments.
    */
   setNestedProperty(obj: Record<string, any>, path: string, value: any): void {
-    const parts = path.split('.');
+    const parts = Object.hasOwn(obj, path)
+      ? [path]
+      : path
+          .replace(/\[(0|[1-9]\d*)\](?=\.|\[|$)/g, (_, index, offset) => (offset === 0 ? index : `.${index}`))
+          .split('.');
+    if (parts.some(part => part === '__proto__' || part === 'constructor' || part === 'prototype')) return;
+
     let current = obj;
     for (let i = 0; i < parts.length - 1; i++) {
       const part = parts[i];
-      if (!current[part] || typeof current[part] !== 'object') {
-        current[part] = {};
+      if (!Object.hasOwn(current, part) || !current[part] || typeof current[part] !== 'object') {
+        const next = parts[i + 1];
+        current[part] = /^(0|[1-9]\d*)$/.test(next) && Number(next) < 2 ** 32 - 1 ? [] : {};
       }
       current = current[part];
     }

@@ -42,7 +42,7 @@ Unlike naive transpilers that only convert single flat workflows, `n8n-to-fastif
 Using a Kahn-inspired topological sorter, the compiler validates your visual graph before emitting a single line of code. Circular dependencies fail immediately at CI/CD build-time rather than causing silent infinite loops in production.
 
 ### 3. Native Expression Transpiler
-n8n expressions like `={{ $json.customer.email }}`, `={{ $('Webhook').item.json.token }}`, and `={{ $env.API_KEY }}` are compiled into safe native JavaScript with deep optional chaining (`?.`).
+n8n expressions like `={{ $json.customer.email }}`, `={{ $binary.data.fileName }}`, `={{ $('Webhook').item.json.token }}`, `={{ $now.toISO() }}`, and `={{ $env.API_KEY }}` are compiled into safe native JavaScript with deep optional chaining (`?.`).
 
 ---
 
@@ -89,21 +89,22 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 
 ---
 
-## 🧩 Supported Nodes (v0.1)
+## 🧩 Supported Nodes
 
 | n8n Node | Compiled Native Behavior |
 | :--- | :--- |
 | **Webhook** | Native Fastify route handler (`GET`, `POST`, `PUT`, `DELETE`, `ALL`) |
 | **Respond to Webhook** | `reply.code(status).send(payload)` with JSON/Text support |
-| **Code / Function** | Native async JavaScript execution with `$input`, `$json`, `$env`, and `$('Node')` bindings |
+| **Code / Function** | Native async JavaScript execution with `$input`, `$json`, `$env`, `$items()`, `$('Node').isExecuted`, and `$('Node')` bindings |
 | **Code on Error** | JavaScript Code running once for all items can emit `json.error` through its regular output |
 | **Disabled nodes** | Skips detached nodes and passes a single main input through to output 0 |
+| **No Operation (`noOp`)** | Pass-through preserving the full input batch (`typeVersion` 1) |
 | **Execute Workflow** | Direct in-memory function invocation via `WorkflowRegistry` |
 | **IF** | Routes each item to its true or false output |
-| **Filter** | Deterministic branch tracking |
-| **Switch** | Routes each item by rule or output-index expression, with configurable fallback in rules mode |
-| **Set / Edit Fields** | Manual assignments, v3.4 JSON Output, dot-notation, `keepOnlySet`, and binary preservation |
-| **HTTP Request** | Native `fetch()` with JSON headers, JSON or multipart bodies, and binary file responses |
+| **Filter** | Per-item deterministic filtering and branch tracking |
+| **Switch** | Routes each item by rule or output-index expression, with configurable fallback and `continueRegularOutput` |
+| **Set / Edit Fields** | Manual assignments, v3.4 JSON Output, dot-notation with prototype-pollution guards, `keepOnlySet`, and binary preservation |
+| **HTTP Request** | Native `fetch()` with JSON headers, single-encoded JSON or multipart bodies, timeouts, retries, `Never Error`, `$node` bindings, and binary file responses |
 | **Aggregate** | In-memory item aggregation |
 | **Split Out** | Expands nested arrays into individual `N8nItem[]` items |
 | **Merge** | Appends branches or combines items by position across up to ten destination ports |
@@ -111,15 +112,14 @@ Place a `.env` file in the generated service directory and run `bun run start` f
 | **Postgres Trigger** | Start a workflow from notifications on an existing channel (`POSTGRES_TRIGGER_URL`) |
 | **RabbitMQ** | Publish messages to an existing exchange (`RABBITMQ_URL`) |
 | **RabbitMQ Trigger** | Consume a queue and acknowledge on receipt, completion, or successful completion |
-| **S3** | Downloads files into binary items from an S3-compatible endpoint |
+| **S3** | Downloads files into binary items from an S3-compatible endpoint (with batch retry support) |
 | **Convert to File** | Converts all input items into a single UTF-8 JSON binary file |
 | **Compression** | Decompresses inline ZIP and GZIP binary fields with anti-Zip-Bomb & path-traversal limits |
 | **OpenAI / Gemini LLM** | Native `fetch()` completion calls via `OPENAI_API_KEY` |
 | **Wait** | In-process time intervals with version-specific defaults and runtime expressions |
 | **Stop and Error** | Stops an active workflow path with a message or structured error |
-| **Stop and Error** | Stops an active workflow path with a message or structured error |
 
-> Legacy `$node["Node name"]` references in a `Code` node running once for all items read the first item from the connected output (`.json`, legacy `.data` alias, and `.binary` metadata).
+> Legacy `$node["Node name"]` references in a `Code` node running once for all items (and in `HTTP Request` URL/headers) read the matching batch from the connected output (`.json`, legacy `.data` alias, and `.binary` metadata).
 >
 > Compiled polling loops support a single-entry cycle with one timed `Wait` and one `IF` or `Switch` retry port; completed batches continue after the cycle and direct `Stop and Error` exits fail immediately. Set `N8N_TO_FASTIFY_POLL_MAX_ATTEMPTS` at runtime to override the default limit of `100` attempts per batch.
 
@@ -231,9 +231,11 @@ Each object is downloaded in order and stored as base64 under the configured bin
 
 Set the response format to **File** to save the response in the configured binary property (default `data`) alongside the input JSON. Strict mode rejects the combination of **File** and **Include Response Headers and Status**.
 
-With `Send Headers` enabled, `specifyHeaders: 'json'` accepts either a JSON string or an object of header names and values.
+With `Send Headers` enabled, `specifyHeaders: 'json'` accepts either a JSON string or an object of header names and values. JSON bodies on `POST`, `PUT`, and `PATCH` accept either an object or a pre-serialized JSON string without double-encoding.
 
-HTTP requests treat non-2xx statuses as errors by default. Enable **Never Error** to process the response body regardless of the status.
+**Timeout & Retries:** `options.timeout` configures how long `HTTP Request` waits for initial response headers in milliseconds (default `300,000` ms) using a native `AbortController`. Enabling **Retry on Fail** (`retryOnFail`, `maxTries`, `waitBetweenTries`) replays failed batches for both `HTTP Request` and `S3` Download nodes.
+
+HTTP requests treat non-2xx statuses as errors by default. Enable **Never Error** (or `Ignore Response Code` on v1/v2) to process the response body regardless of the status.
 
 ---
 
