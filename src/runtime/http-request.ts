@@ -1,3 +1,27 @@
+export function createResponseTimeout(timeout: unknown) {
+  // Environment variables evaluate to strings before reaching the timeout helper.
+  const numericTimeout = typeof timeout === "string" && timeout.trim() ? Number(timeout) : timeout;
+  const milliseconds = numericTimeout == null || numericTimeout === 0 ? 300_000 : numericTimeout;
+  if (typeof milliseconds !== "number" || !Number.isInteger(milliseconds) ||
+      milliseconds < 0 || milliseconds > 2_147_483_647) {
+    throw new Error("HTTP Request timeout must be a non-negative integer in milliseconds within the timer range");
+  }
+
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return {
+    start() {
+      timer = setTimeout(() => {
+        controller.abort(new Error("HTTP Request timed out after " + milliseconds + " ms"));
+      }, milliseconds);
+      return controller.signal;
+    },
+    clear() {
+      clearTimeout(timer);
+    },
+  };
+}
+
 import type { N8nItem } from './n8n-helper';
 import { posix } from 'node:path';
 import { createBinaryData } from './binary-data';

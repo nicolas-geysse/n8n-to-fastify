@@ -524,6 +524,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
     const prevVar = ctx.previousVariableName || 'inputItems';
     const method = (params.method || 'GET').toUpperCase();
     const urlExpr = ExpressionParser.parse(params.url || '');
+    const timeout = ExpressionParser.parse(params.options?.timeout ?? 0);
     const multipart = usesMultipartBody(params);
     const jsonHeaders = usesJsonHeaders(params);
     // HTTP Request v1/v2 serialized Never Error as Ignore Response Code.
@@ -586,13 +587,15 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
     ${ctx.variableName} = await Promise.all((${prevVar} || inputItems).map(async (${callbackParameters}) => {
       const item = currentItem;
       const targetUrl = ${urlExpr};
+      const responseTimeout = createResponseTimeout(${timeout});
       ${headersSnippet}
       const reqBody = ${bodySnippet};
       const res = await fetchWithStatus(targetUrl, Boolean(${neverError}), {
         method: ${JSON.stringify(method)},
         headers: reqHeaders,
-        ...(reqBody !== undefined ? { body: reqBody } : {})
-      });
+        ...(reqBody !== undefined ? { body: reqBody } : {}),
+        signal: responseTimeout.start(),
+      }).finally(responseTimeout.clear);
       ${responseSnippet}
     }));
     item = ${ctx.variableName}[0] || { json: {} };
