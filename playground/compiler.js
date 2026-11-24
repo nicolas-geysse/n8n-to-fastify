@@ -1801,9 +1801,12 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
         defaultModel = "llama-3.3-70b-versatile";
       }
       const model = params.modelId?.value || params.model?.value || params.model || defaultModel;
-      const promptText = params.messages?.values?.[0]?.content || params.prompt || params.text || "Hello";
+      const messageValues = Array.isArray(params.messages?.messageValues) ? params.messages.messageValues : [];
+      const systemFromChain = messageValues.find((m) => m?.type === "system")?.message;
+      const userFromChain = messageValues.find((m) => m?.type !== "system")?.message;
+      const promptText = params.messages?.values?.[0]?.content || userFromChain || params.prompt || params.text || "Hello";
       const promptExpr = ExpressionParser.parse(promptText);
-      const systemMessage = params.options?.systemMessage ?? params.systemMessage;
+      const systemMessage = params.options?.systemMessage ?? params.systemMessage ?? systemFromChain;
       const systemExpr = systemMessage ? ExpressionParser.parse(systemMessage) : "undefined";
       const temperature = params.options?.temperature ?? params.temperature;
       const maxTokens = params.options?.maxTokens ?? params.options?.maxTokensToSample ?? params.maxTokens;
@@ -1877,7 +1880,8 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       const calendarId = typeof params.calendar === "object" ? params.calendar?.value || "primary" : params.calendar || "primary";
       const calExpr = ExpressionParser.parse(calendarId);
       const eventIdExpr = params.eventId ? ExpressionParser.parse(params.eventId) : "undefined";
-      const summaryExpr = params.summary ? ExpressionParser.parse(params.summary) : "undefined";
+      const rawSummary = params.additionalFields?.summary ?? params.summary;
+      const summaryExpr = rawSummary ? ExpressionParser.parse(rawSummary) : "undefined";
       const startExpr = params.start ? ExpressionParser.parse(params.start) : "undefined";
       const endExpr = params.end ? ExpressionParser.parse(params.end) : "undefined";
       const descExpr = params.additionalFields?.description ? ExpressionParser.parse(params.additionalFields.description) : "undefined";

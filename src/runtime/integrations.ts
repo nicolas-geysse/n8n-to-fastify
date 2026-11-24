@@ -67,7 +67,8 @@ export async function sendEmailItem(options: {
         from: options.from || process.env.EMAIL_FROM || 'noreply@localhost',
         to: options.to.split(',').map(s => s.trim()).filter(Boolean),
         subject: options.subject,
-        ...(options.html ? { html: options.html } : { text: options.text || '' }),
+        ...(options.html ? { html: options.html } : {}),
+        ...(options.text !== undefined ? { text: options.text } : (!options.html ? { text: '' } : {})),
       }),
     });
     if (!res.ok) throw new Error(`Resend API failed with status ${res.status}`);
