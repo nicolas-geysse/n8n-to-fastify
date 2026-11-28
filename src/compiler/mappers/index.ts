@@ -1,7 +1,7 @@
 import { N8nNode } from '../parser';
 import { ExpressionParser } from '../expression-parser';
 import { isPositionMerge, mapPositionMerge } from './position-merge';
-import { getCodeItemMatchingIssue, getLegacyNodeReferenceIssue, isCodeNode, usesCodeItemMatching } from './code-context';
+import { getCodeItemMatchingIssue, getLegacyNodeReferenceIssue, isCodeNode, usesCodeItemMatching, usesCodeNodeLookups } from './code-context';
 import { continuesCodeOnRegularOutput } from './code-errors';
 import { getRawEditFieldsIssue, isRawEditFields, mapRawEditFields } from './raw-edit-fields';
 import { mapRabbitMqPublisher, rabbitMqPublisherType } from './rabbitmq';
@@ -155,13 +155,19 @@ export class NodeMappers {
     const rawCode = params.jsCode || params.functionCode || 'return $input.all();';
     const prevVar = ctx.previousVariableName || 'inputItems';
     const legacyBinding = ctx.legacyNodePorts
-      ? `      const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});\n`
+      ? `      const $node = createLegacyNodeReferences(ctx, workflowNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});\n`
       : '';
 
-    const matchingBinding = usesCodeItemMatching(ctx.node) ? `      const $ = (name: string) => ({
-        ...ctx.getNode(name),
-        itemMatching: (index: number) => ctx.getLinkedItem(name, currentItems, index),
-      });\n` : '';
+    const itemMatching = usesCodeItemMatching(ctx.node);
+    const nodeLookupBinding = (usesCodeNodeLookups(ctx.node) || itemMatching) ? `      const $ = (name: string) => {
+        if (!workflowNodeNames.has(name)) throw new Error("Referenced node doesn't exist");
+        const target = ctx.getNode(name);
+        return {
+          first: () => target.first() ?? { json: {} },
+          item: target.item ?? { json: {} },
+          all: target.all,${itemMatching ? `\n          itemMatching: (index: number) => ctx.getLinkedItem(name, currentItems, index),` : ''}
+        };
+      };\n` : '';
 
     const legacyItemsBinding = /\$items\b/.test(rawCode)
       ? `      const $items = (nodeName?: string, outputIndex = 0, runIndex = -1) => nodeName === undefined
@@ -175,9 +181,6 @@ export class NodeMappers {
       .replace(/\$input\.first\(\)/g, '(currentItems[0] || { json: {} })')
       .replace(/\$input\.item/g, '(currentItems[0] || { json: {} })')
       .replace(/\$json/g, '(currentItems[0]?.json || {})')
-      .replace(/\$\(['"](.*?)['"]\)\.first\(\)/g, (_: string, n: string) => `(ctx.getNode(${JSON.stringify(n)})?.first() || { json: {} })`)
-      .replace(/\$\(['"](.*?)['"]\)\.item(?![\w$])/g, (_: string, n: string) => `(ctx.getNode(${JSON.stringify(n)})?.item || { json: {} })`)
-      .replace(/\$\(['"](.*?)['"]\)\.all\(\)/g, (_: string, n: string) => `(ctx.getNode(${JSON.stringify(n)})?.all() || [])`)
       .replace(/\$now/g, 'DateTime.now()');
 
     const inputBinding = /\$input\b/.test(rawCode) ? `      const $input = {
@@ -203,7 +206,7 @@ ${legacyItemsBinding}      const result = await (async function (this: { helpers
 
     const operation = `(async () => {
       const currentItems = ${prevVar} || inputItems;
-${legacyBinding}${matchingBinding}${inputBinding}${itemsBinding}${execution}
+${legacyBinding}${nodeLookupBinding}${inputBinding}${itemsBinding}${execution}
     })()`;
     return `
     // [Node: ${ctx.node.name}] Code Execution
@@ -474,7 +477,7 @@ ${legacyBinding}${matchingBinding}${inputBinding}${itemsBinding}${execution}
     const multipart = usesMultipartBody(params);
     const jsonHeaders = usesJsonHeaders(params);
     const legacyBinding = (index: string): string => ctx.legacyNodePorts
-      ? `const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)}, ${index}, batch);`
+      ? `const $node = createLegacyNodeReferences(ctx, workflowNodeNames, ${JSON.stringify(ctx.legacyNodePorts)}, ${index}, batch);`
       : '';
 
     // HTTP Request v1/v2 serialized Never Error as Ignore Response Code.

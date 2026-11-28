@@ -403,7 +403,7 @@
       const schedule = pollingLoops.length ? projectPollingSchedule(nodes, connections, pollingLoops) : { nodes, connections };
       const entryGroups = new Map(pollingLoops.map((loop) => [loop.entry, loop.nodes]));
       const nodeByName = new Map(nodes.map((node) => [node.name, node]));
-      const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections, useCanvasOrder).flatMap((node) => entryGroups.get(node.name)?.map((name) => nodeByName.get(name)) ?? [node]);
+      const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections, useCanvasOrder).flatMap((node) => entryGroups.get(node.name)?.map((name2) => nodeByName.get(name2)) ?? [node]);
       return {
         id,
         name,
@@ -488,7 +488,7 @@
     }
   }
 
-  // ../n2f-polling-fork/node_modules/js-tokens/index.js
+  // node_modules/js-tokens/index.js
   var HashbangComment;
   var Identifier;
   var JSXIdentifier;
@@ -1066,6 +1066,12 @@
   function isCodeNode(node) {
     return node.type.includes("code") || node.type.includes("function");
   }
+  function usesCodeNodeLookups(node) {
+    if (!isCodeNode(node))
+      return false;
+    const code = node.parameters?.jsCode || node.parameters?.functionCode;
+    return typeof code === "string" && /\$\s*\(/.test(code);
+  }
   function usesLegacyNodeReferences(node) {
     if (!isCodeNode(node))
       return false;
@@ -1159,7 +1165,7 @@
     const includeAll = params.includeOtherFields === true && (params.include ?? "all") === "all";
     const stripBinary = options.stripBinary ?? true;
     const dotNotation = options.dotNotation ?? true;
-    const legacyBinding = ctx.legacyNodePorts ? "const $node = createLegacyNodeReferences(ctx, legacyNodeNames, " + JSON.stringify(ctx.legacyNodePorts) + ", itemIndex);" : "";
+    const legacyBinding = ctx.legacyNodePorts ? "const $node = createLegacyNodeReferences(ctx, workflowNodeNames, " + JSON.stringify(ctx.legacyNodePorts) + ", itemIndex);" : "";
     return [
       "{",
       "  const source: N8nItem[] = " + (ctx.previousVariableName ?? "inputItems") + ";",
@@ -1617,18 +1623,25 @@
       const params = ctx.node.parameters || {};
       const rawCode = params.jsCode || params.functionCode || "return $input.all();";
       const prevVar = ctx.previousVariableName || "inputItems";
-      const legacyBinding = ctx.legacyNodePorts ? `      const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});
+      const legacyBinding = ctx.legacyNodePorts ? `      const $node = createLegacyNodeReferences(ctx, workflowNodeNames, ${JSON.stringify(ctx.legacyNodePorts)});
 ` : "";
-      const matchingBinding = usesCodeItemMatching(ctx.node) ? `      const $ = (name: string) => ({
-        ...ctx.getNode(name),
-        itemMatching: (index: number) => ctx.getLinkedItem(name, currentItems, index),
-      });
+      const itemMatching = usesCodeItemMatching(ctx.node);
+      const nodeLookupBinding = usesCodeNodeLookups(ctx.node) || itemMatching ? `      const $ = (name: string) => {
+        if (!workflowNodeNames.has(name)) throw new Error("Referenced node doesn't exist");
+        const target = ctx.getNode(name);
+        return {
+          first: () => target.first() ?? { json: {} },
+          item: target.item ?? { json: {} },
+          all: target.all,${itemMatching ? `
+          itemMatching: (index: number) => ctx.getLinkedItem(name, currentItems, index),` : ""}
+        };
+      };
 ` : "";
       const legacyItemsBinding = /\$items\b/.test(rawCode) ? `      const $items = (nodeName?: string, outputIndex = 0, runIndex = -1) => nodeName === undefined
         ? currentItems
         : ctx.getNodeRunItems(nodeName, outputIndex, runIndex);
 ` : "";
-      const transformedCode = rawCode.replace(/\$input\.all\(\)/g, "currentItems").replace(/\$input\.first\(\)/g, "(currentItems[0] || { json: {} })").replace(/\$input\.item/g, "(currentItems[0] || { json: {} })").replace(/\$json/g, "(currentItems[0]?.json || {})").replace(/\$\(['"](.*?)['"]\)\.first\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.first() || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.item(?![\w$])/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.item || { json: {} })`).replace(/\$\(['"](.*?)['"]\)\.all\(\)/g, (_, n) => `(ctx.getNode(${JSON.stringify(n)})?.all() || [])`).replace(/\$now/g, "DateTime.now()");
+      const transformedCode = rawCode.replace(/\$input\.all\(\)/g, "currentItems").replace(/\$input\.first\(\)/g, "(currentItems[0] || { json: {} })").replace(/\$input\.item/g, "(currentItems[0] || { json: {} })").replace(/\$json/g, "(currentItems[0]?.json || {})").replace(/\$now/g, "DateTime.now()");
       const inputBinding = /\$input\b/.test(rawCode) ? `      const $input = {
         all: () => currentItems,
         first: () => currentItems[0] ?? { json: {} },
@@ -1649,7 +1662,7 @@ ${legacyItemsBinding}      const result = await (async function (this: { helpers
       }` : runCode;
       const operation = `(async () => {
       const currentItems = ${prevVar} || inputItems;
-${legacyBinding}${matchingBinding}${inputBinding}${itemsBinding}${execution}
+${legacyBinding}${nodeLookupBinding}${inputBinding}${itemsBinding}${execution}
     })()`;
       return `
     // [Node: ${ctx.node.name}] Code Execution
@@ -1887,7 +1900,7 @@ ${legacyBinding}${matchingBinding}${inputBinding}${itemsBinding}${execution}
       const timeout = ExpressionParser.parse(params.options?.timeout ?? 0);
       const multipart = usesMultipartBody(params);
       const jsonHeaders = usesJsonHeaders(params);
-      const legacyBinding = (index) => ctx.legacyNodePorts ? `const $node = createLegacyNodeReferences(ctx, legacyNodeNames, ${JSON.stringify(ctx.legacyNodePorts)}, ${index}, batch);` : "";
+      const legacyBinding = (index) => ctx.legacyNodePorts ? `const $node = createLegacyNodeReferences(ctx, workflowNodeNames, ${JSON.stringify(ctx.legacyNodePorts)}, ${index}, batch);` : "";
       const legacyIgnoreError = (ctx.node.typeVersion ?? 1) < 3 ? params.options?.ignoreResponseCode : undefined;
       const neverError = ExpressionParser.parse(params.options?.response?.response?.neverError ?? legacyIgnoreError ?? false, "batch[0]", "batch");
       let headersObj = "{}";
@@ -2206,8 +2219,8 @@ ${steps.join(`,
       }
     }
     let hasIncoming = false;
-    for (const outputs of Object.values(workflow.connections)) {
-      for (const [type, ports] of Object.entries(outputs)) {
+    for (const outputs2 of Object.values(workflow.connections)) {
+      for (const [type, ports] of Object.entries(outputs2)) {
         for (const targets of ports) {
           for (const target of targets ?? []) {
             if (target?.node !== node.name)
@@ -2383,7 +2396,7 @@ ${steps.join(`,
       const retryNodes = wf.nodes.filter((node) => !node.disabled && usesNodeRetry(node, Boolean(chains.get(node))));
       const retryImport = retryNodes.length > 0 ? `import { runWithNodeRetry${retryNodes.some((node) => node.type === "n8n-nodes-base.httpRequest") ? ", settleRetryRequests" : ""} } from '${runtimePrefix}/node-retry';
 ` : "";
-      const legacyNames = legacyNodes.size > 0 ? `const legacyNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map((node) => node.name))});
+      const workflowNodeNames = legacyNodes.size > 0 || wf.nodes.some((node) => usesCodeNodeLookups(node) || usesCodeItemMatching(node)) ? `const workflowNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map((node) => node.name))});
 ` : "";
       const nodesByName = new Map(wf.nodes.map((node) => [node.name, node]));
       const batchLookup = wf.nodes.some((node) => !node.disabled && usesCodeItemMatching(node)) ? "getItemMatchingBatches" : "getNodeOutputBatches";
@@ -2413,7 +2426,7 @@ ${steps.join(`,
 import { n8n, N8nItem } from '${runtimePrefix}/n8n-helper';
 ${communityImports}import { executeSubworkflow, registerWorkflow } from '${runtimePrefix}/workflow-registry';
 ${httpStatusImport}${positionMergeImport}${legacyImport}${rawFieldsImport}${rabbitMqImport}${s3Import}${compressionImport}${jsonFileImport}${httpRequestImport}${waitImport}${stopAndErrorImport}
-${httpTimeoutImport}${jsonBodyImport}${extractFileImport}${linkedLlmImport}${legacyNames}
+${httpTimeoutImport}${jsonBodyImport}${extractFileImport}${linkedLlmImport}${workflowNodeNames}
 ${retryImport}const DateTime = {
   now: () => ({
     toString: () => new Date().toISOString(),
