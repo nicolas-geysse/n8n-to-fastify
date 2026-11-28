@@ -197,7 +197,7 @@ const DateTime = {
       const loop = loopsByMember.get(node.name);
       if (loop) {
         if (node.name === loop.entry) {
-          const trackedEdges = appendPlan.tracked.has(loop.decision) ? appendPlan.orderedEdges(node) : undefined;
+          const trackedEdges = appendPlan.tracked.has(loop.decision) ? appendPlan.orderedEdges : undefined;
           const wrapLoopNode = (member: N8nNode, condition: string, code: string) =>
             this.generateNodeBlock(wf.id, member, condition, code);
           bodyCode += emitPollingLoop(loop, nodesByName, mapNode, wrapLoopNode, trackedEdges);
@@ -251,7 +251,8 @@ ${mapNode(node, prevExpr).trim()}
         nodeCode = mapNode(node, prevExpr);
         if (tracksBatches) {
           const edges = JSON.stringify(appendPlan.orderedEdges(node));
-          nodeCode += `\nappendBatches.recordMergedOutput(${nodeName}, ${edges});`;
+          const contributionLimit = isPositionMerge(node) ? `, ${varName}.length` : '';
+          nodeCode += `\nappendBatches.recordMergedOutput(${nodeName}, ${edges}${contributionLimit});`;
         }
       }
 

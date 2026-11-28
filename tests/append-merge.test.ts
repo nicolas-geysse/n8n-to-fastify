@@ -180,18 +180,36 @@ test('Append orders Combine by Position by the completing input from the same di
 });
 
 test.each([
-  ['first attempt', [0]],
-  ['one retry', [1]],
-  ['separate exits', [0, 1]],
-] as const)('Append preserves polling exit delivery order for %s', async (_, attempts) => {
-  const data = attempts.map((remaining, index) => ({ json: { id: 'PartialData ' + index, remaining } }));
+  ['a matched pair', true, [['Combined', 'Base'], ['Sibling']]],
+  ['a missing partner', false, [['Sibling', 'Base']]],
+] as const)('Append batches with %s and a later Combine delivery', async (_, hasPartner, expected) => {
   await checkWorkflow([
-    source('Start', 0), source('Base', 10),
-    code('Data', 20, `return ${JSON.stringify(data)};`),
-    code('Empty', 30, 'return [];'),
-    append('Partial', 10),
-    source('Sibling', 15),
-    code('Polled', 20, 'return $input.all().map(({ json }) => ({ json: { id: "Polled " + json.id + " after " + json.polls } }));'),
+    source('Start', 0), source('Base', 0),
+    source('Left', 10), source('Sibling', 30), source('Extra', 40),
+    code('Partner', 20, hasPartner ? 'return [{ json: { partner: true } }];' : 'return [];'),
+    {
+      name: 'Combine', type: 'n8n-nodes-base.merge', typeVersion: 3.2, position: [400, 10],
+      parameters: { mode: 'combine', combineBy: 'combineByPosition', options: { includeUnpaired: false } },
+    },
+    code('Relay', 10, `
+      return $input.all().map(({ json }) => ({
+        json: { id: json.id === "Left" && json.partner ? "Combined" : "Unexpected" },
+      }));
+    `),
+  ], {
+    Start: output(edge('Base'), edge('Left'), edge('Partner'), edge('Sibling'), edge('Extra')),
+    Base: output(edge('Append', 1)),
+    Left: output(edge('Combine')),
+    Partner: output(edge('Combine', 1)),
+    Sibling: output(edge('Append')),
+    Extra: output(edge('Combine')),
+    Combine: output(edge('Relay')),
+    Relay: output(edge('Append')),
+  }, expected.map(batch => [...batch]));
+});
+
+function pollingNodes(waitY: number) {
+  return [
     code('Poll', 20, `
       return $input.all().map(({ json }) => ({
         json: { ...json, ready: json.remaining <= 0, remaining: json.remaining - 1, polls: (json.polls ?? 0) + 1 },
@@ -209,9 +227,26 @@ test.each([
       } },
     },
     {
-      name: 'Wait', type: 'n8n-nodes-base.wait', typeVersion: 1.1, position: [200, 30],
+      name: 'Wait', type: 'n8n-nodes-base.wait', typeVersion: 1.1, position: [200, waitY],
       parameters: { resume: 'timeInterval', amount: 0 },
     },
+  ];
+}
+
+test.each([
+  ['first attempt', [0]],
+  ['one retry', [1]],
+  ['separate exits', [0, 1]],
+] as const)('Append preserves polling exit delivery order for %s', async (_, attempts) => {
+  const data = attempts.map((remaining, index) => ({ json: { id: 'PartialData ' + index, remaining } }));
+  await checkWorkflow([
+    source('Start', 0), source('Base', 10),
+    code('Data', 20, `return ${JSON.stringify(data)};`),
+    code('Empty', 30, 'return [];'),
+    append('Partial', 10),
+    source('Sibling', 15),
+    code('Polled', 20, 'return $input.all().map(({ json }) => ({ json: { id: "Polled " + json.id + " after " + json.polls } }));'),
+    ...pollingNodes(30),
   ], {
     Start: output(edge('Base'), edge('Data'), edge('Empty')),
     Base: output(edge('Append', 1)),
@@ -228,4 +263,24 @@ test.each([
     ['Sibling'],
     ...data.map(({ json }) => [`Polled ${json.id} after ${json.remaining + 1}`]),
   ]);
+});
+
+test.each([
+  ['retry', 10, [['Base', 'second'], ['first']]],
+  ['exit', 30, [['Base', 'first'], ['second']]],
+] as const)('Append pairs polling exits when the %s path runs first', async (_, waitY, expected) => {
+  await checkWorkflow([
+    source('Start', 0), source('Base', 10),
+    code('Data', 20, 'return [{ json: { id: "first", remaining: 0 } }, { json: { id: "second", remaining: 1 } }];'),
+    code('Polled', 20, 'return $input.all();'),
+    ...pollingNodes(waitY),
+  ], {
+    Start: output(edge('Base'), edge('Data')),
+    Base: output(edge('Append')),
+    Data: output(edge('Poll')),
+    Poll: output(edge('Ready')),
+    Ready: { main: [[edge('Polled')], [edge('Wait')]] },
+    Polled: output(edge('Append', 1)),
+    Wait: output(edge('Poll')),
+  }, expected.map(batch => [...batch]));
 });

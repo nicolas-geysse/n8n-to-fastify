@@ -65,10 +65,15 @@ export class AppendBatches {
       .map(batch => ({ ...batch, input: edge.input, priority: edge.priority })));
   }
 
-  recordMergedOutput(node: string, edges: BatchEdge[]): void {
-    // Single-run Merge mappers carry the last contributing delivery.
+  recordMergedOutput(node: string, edges: BatchEdge[], maxItemsPerInput = Infinity): void {
+    // Positional Merge uses at most one item from each input per output item.
+    // Count items in the same order the mapper reads them.
+    const seen = new Map<number, number>();
     let latest: Delivery | undefined;
     for (const delivery of this.deliveries(edges)) {
+      const count = seen.get(delivery.input) ?? 0;
+      if (count >= maxItemsPerInput) continue;
+      seen.set(delivery.input, count + delivery.items.length);
       if (!latest || compareDelivery(delivery, latest) > 0) latest = delivery;
     }
     const orders = new Map<number, number[][]>();
@@ -125,13 +130,16 @@ export class AppendBatches {
   async runPollingLoop(
     plan: PollingRun,
     entry: BatchEdge,
+    retryPriority: number,
     execute: (items: N8nItem[], assertCanRetry: () => void) => Promise<void>,
   ): Promise<void> {
     const batches = this.inputs([entry]);
     const orders = new Map<number, number[][]>();
     await this.ctx.runPollingLoop(plan, batches.map(batch => batch.items), execute, (port, inputIndex, attempt) => {
       const portOrders = orders.get(port) ?? [];
-      portOrders.push([...batches[inputIndex].order, attempt]);
+      // Each retry is a descendant of the previous decision's retry edge.
+      const retryPath = Array<number>(attempt - 1).fill(retryPriority);
+      portOrders.push([...batches[inputIndex].order, ...retryPath]);
       orders.set(port, portOrders);
     });
     this.outputOrders.set(plan.decision, orders);

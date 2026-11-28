@@ -1945,9 +1945,11 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
     const { entry, terminalExits, repeatPort, ...runtimePlan } = loop;
     const entryNode = nodes.get(entry);
     const initial = entryNode.incomingConnections.find((connection) => !loop.nodes.includes(connection.sourceNode));
-    const trackedEntry = trackedEdges?.find((edge) => edge.source === initial.sourceNode && edge.output === initial.outputIndex);
+    const trackedEntry = trackedEdges?.(entryNode).find((edge) => edge.source === initial.sourceNode && edge.output === initial.outputIndex);
+    const retryTarget = loop.nodes[(loop.nodes.indexOf(loop.decision) + 1) % loop.nodes.length];
+    const trackedRetry = trackedEdges?.(nodes.get(retryTarget)).find((edge) => edge.source === loop.decision && edge.output === repeatPort);
     const runner = trackedEntry ? "appendBatches.runPollingLoop" : "ctx.runPollingLoop";
-    const inputBatches = trackedEntry ? JSON.stringify(trackedEntry) : "ctx.getNodeOutputBatches(" + JSON.stringify(initial.sourceNode) + ", " + initial.outputIndex + ")";
+    const inputArgs = trackedEntry ? `${JSON.stringify(trackedEntry)}, ${trackedRetry.priority}` : "ctx.getNodeOutputBatches(" + JSON.stringify(initial.sourceNode) + ", " + initial.outputIndex + ")";
     let body = "";
     for (const [index, name] of loop.nodes.entries()) {
       const node = nodes.get(name);
@@ -1972,7 +1974,7 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       body += "    if (ctx.getNodeOutput(" + JSON.stringify(name) + ", " + repeatPort + `)?.length) assertCanRetry();
 `;
     }
-    return "  await " + runner + "(" + JSON.stringify(runtimePlan) + ", " + inputBatches + `, async (pollingItems, assertCanRetry) => {
+    return "  await " + runner + "(" + JSON.stringify(runtimePlan) + ", " + inputArgs + `, async (pollingItems, assertCanRetry) => {
 ` + body + `  });
 `;
   }
@@ -2212,7 +2214,7 @@ ctx.setNodeOutput(${nodeName}, inputItems);`;
         const loop = loopsByMember.get(node.name);
         if (loop) {
           if (node.name === loop.entry) {
-            const trackedEdges = appendPlan.tracked.has(loop.decision) ? appendPlan.orderedEdges(node) : undefined;
+            const trackedEdges = appendPlan.tracked.has(loop.decision) ? appendPlan.orderedEdges : undefined;
             const wrapLoopNode = (member, condition, code) => this.generateNodeBlock(wf.id, member, condition, code);
             bodyCode += emitPollingLoop(loop, nodesByName, mapNode, wrapLoopNode, trackedEdges);
           }
@@ -2258,8 +2260,9 @@ ${mapNode(node, prevExpr).trim()}
           nodeCode = mapNode(node, prevExpr);
           if (tracksBatches) {
             const edges = JSON.stringify(appendPlan.orderedEdges(node));
+            const contributionLimit = isPositionMerge(node) ? `, ${varName}.length` : "";
             nodeCode += `
-appendBatches.recordMergedOutput(${nodeName}, ${edges});`;
+appendBatches.recordMergedOutput(${nodeName}, ${edges}${contributionLimit});`;
           }
         }
         const ancestorTriggers = node.ancestorTriggers ?? [];
