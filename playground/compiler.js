@@ -1224,17 +1224,19 @@
   }
 
   // src/compiler/mappers/node-retry.ts
-  function usesNodeRetry(node) {
-    return node.retryOnFail === true && (node.type === "n8n-nodes-base.httpRequest" || node.type === "n8n-nodes-base.s3");
+  function usesNodeRetry(node, linkedChain = false) {
+    const code = node.type === "n8n-nodes-base.code" && node.typeVersion === 2 && (node.parameters?.language ?? "javaScript") === "javaScript" && (node.parameters?.mode ?? "runOnceForAllItems") === "runOnceForAllItems";
+    return node.retryOnFail === true && (code || linkedChain || node.type === "n8n-nodes-base.httpRequest" || node.type === "n8n-nodes-base.s3");
   }
-  function withNodeRetry(node, operation) {
-    if (!usesNodeRetry(node))
+  function withNodeRetry(node, operation, linkedChain = false) {
+    if (!usesNodeRetry(node, linkedChain))
       return operation;
     const maxTries = Math.min(5, Math.max(2, Math.trunc(Number(node.maxTries) || 3)));
     const configuredDelay = node.waitBetweenTries;
     const delayNumber = typeof configuredDelay === "string" && configuredDelay.trim() ? Number(configuredDelay) : configuredDelay;
     const delay = typeof delayNumber === "number" && Number.isFinite(delayNumber) ? Math.min(5000, Math.max(0, Math.trunc(delayNumber))) : 1000;
-    return `runWithNodeRetry(() => ${operation}, ${maxTries}, ${delay})`;
+    const retryOn = node.type === "n8n-nodes-base.code" ? ", 'throw'" : "";
+    return `runWithNodeRetry(() => ${operation}, ${maxTries}, ${delay}${retryOn})`;
   }
 
   // src/compiler/mappers/s3.ts
@@ -1649,22 +1651,19 @@
 ` : "";
       const itemsBinding = /\bitems\b/.test(rawCode) ? `      const items = currentItems;
 ` : "";
-      const runCode = `
+      const operation = `(async () => {
+      const currentItems = ${prevVar} || inputItems;
+${legacyBinding}${nodeLookupBinding}${inputBinding}${itemsBinding}
 ${legacyItemsBinding}      const result = await (async function (this: { helpers: { httpRequest: typeof codeHttpRequest } }) {
         ${transformedCode}
       }).call({ helpers: { httpRequest: codeHttpRequest } });
-      return n8n.normalizeItems(result);`;
-      const execution = continuesCodeOnRegularOutput(ctx.node) ? `
-      try {${runCode}
-      } catch (error) {
-        return [{ json: { error: error instanceof Error ? error.message : String(error) } }];
-      }` : runCode;
+      return n8n.normalizeItems(result);
+    })()`;
+      const execution = withNodeRetry(ctx.node, operation);
+      const output = continuesCodeOnRegularOutput(ctx.node) ? `${execution}.catch((error: unknown) => [{ json: { error: error instanceof Error ? error.message : String(error) } }])` : execution;
       return `
     // [Node: ${ctx.node.name}] Code Execution
-    ${ctx.variableName} = await (async () => {
-      const currentItems = ${prevVar} || inputItems;
-${legacyBinding}${nodeLookupBinding}${inputBinding}${itemsBinding}${execution}
-    })();
+    ${ctx.variableName} = await ${output};
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
     }
@@ -2344,15 +2343,16 @@ ${steps.join(`,
     }`;
     const batchSize = ExpressionParser.parse(params.batching?.batchSize ?? 5, "source[0]", "source");
     const delay = ExpressionParser.parse(params.batching?.delayBetweenBatches ?? 0, "source[0]", "source");
-    return `
-    {
-      const source: N8nItem[] = ${ctx.previousVariableName ?? "inputItems"} || inputItems;
-      ${ctx.variableName} = await runLinkedLlmChain(source, item => [${[...messages, `{ role: 'user', content: String(${prompt} ?? '') }`].join(", ")}], item => ({
+    const operation = `runLinkedLlmChain(source, item => [${[...messages, `{ role: 'user', content: String(${prompt} ?? '') }`].join(", ")}], item => ({
         primary: ${renderModel(models.primary)},
         ${models.fallback ? `fallback: ${renderModel(models.fallback)},` : ""}
         batchSize: Number(${batchSize}),
         delay: Number(${delay}),
-      }));
+      }))`;
+    return `
+    {
+      const source: N8nItem[] = ${ctx.previousVariableName ?? "inputItems"} || inputItems;
+      ${ctx.variableName} = await ${withNodeRetry(ctx.node, operation, true)};
       item = ${ctx.variableName}[0] || { json: {} };
       ctx.setNodeOutputs(${JSON.stringify(ctx.node.name)}, [[0, ${ctx.variableName}]], ${ctx.variableName});
     }`;
@@ -2390,7 +2390,7 @@ ${steps.join(`,
 ` : "";
       const legacyImport = legacyNodes.size > 0 ? `import { createLegacyNodeReferences } from '${runtimePrefix}/code-context';
 ` : "";
-      const retryNodes = wf.nodes.filter((node) => !node.disabled && usesNodeRetry(node));
+      const retryNodes = wf.nodes.filter((node) => !node.disabled && usesNodeRetry(node, Boolean(chains.get(node))));
       const retryImport = retryNodes.length > 0 ? `import { runWithNodeRetry${retryNodes.some((node) => node.type === "n8n-nodes-base.httpRequest") ? ", settleRetryRequests" : ""} } from '${runtimePrefix}/node-retry';
 ` : "";
       const workflowNodeNames = legacyNodes.size > 0 || wf.nodes.some((node) => usesCodeNodeLookups(node) || usesCodeItemMatching(node)) ? `const workflowNodeNames = new Set<string>(${JSON.stringify(wf.nodes.map((node) => node.name))});

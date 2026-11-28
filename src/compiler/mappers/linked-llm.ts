@@ -1,5 +1,6 @@
 import type { N8nNode, ParsedWorkflow } from '../core-parser';
 import { ExpressionParser } from '../expression-parser';
+import { withNodeRetry } from './node-retry';
 import type { NodeMapperContext } from './index';
 import type { ModelTransport } from '../../runtime/linked-llm';
 
@@ -132,15 +133,16 @@ export function mapLinkedLlmChain(ctx: NodeMapperContext, models: ChainModels | 
     }`;
   const batchSize = ExpressionParser.parse(params.batching?.batchSize ?? 5, 'source[0]', 'source');
   const delay = ExpressionParser.parse(params.batching?.delayBetweenBatches ?? 0, 'source[0]', 'source');
-  return `
-    {
-      const source: N8nItem[] = ${ctx.previousVariableName ?? 'inputItems'} || inputItems;
-      ${ctx.variableName} = await runLinkedLlmChain(source, item => [${[...messages, `{ role: 'user', content: String(${prompt} ?? '') }`].join(', ')}], item => ({
+  const operation = `runLinkedLlmChain(source, item => [${[...messages, `{ role: 'user', content: String(${prompt} ?? '') }`].join(', ')}], item => ({
         primary: ${renderModel(models.primary)},
         ${models.fallback ? `fallback: ${renderModel(models.fallback)},` : ''}
         batchSize: Number(${batchSize}),
         delay: Number(${delay}),
-      }));
+      }))`;
+  return `
+    {
+      const source: N8nItem[] = ${ctx.previousVariableName ?? 'inputItems'} || inputItems;
+      ${ctx.variableName} = await ${withNodeRetry(ctx.node, operation, true)};
       item = ${ctx.variableName}[0] || { json: {} };
       ctx.setNodeOutputs(${JSON.stringify(ctx.node.name)}, [[0, ${ctx.variableName}]], ${ctx.variableName});
     }`;
