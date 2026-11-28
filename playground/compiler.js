@@ -435,7 +435,8 @@
     const configuredDelay = node.waitBetweenTries;
     const delayNumber = typeof configuredDelay === "string" && configuredDelay.trim() ? Number(configuredDelay) : configuredDelay;
     const delay = typeof delayNumber === "number" && Number.isFinite(delayNumber) ? Math.min(5000, Math.max(0, Math.trunc(delayNumber))) : 1000;
-    return `runWithNodeRetry(() => ${operation}, ${maxTries}, ${delay})`;
+    const retryOn = node.type === "n8n-nodes-base.code" ? ", 'throw'" : "";
+    return `runWithNodeRetry(() => ${operation}, ${maxTries}, ${delay}${retryOn})`;
   }
 
   // src/compiler/expression-parser.ts
@@ -1305,24 +1306,20 @@
 ` : "";
       const itemsBinding = /\bitems\b/.test(rawCode) ? `      const items = currentItems;
 ` : "";
-      const runCode = `
-${legacyItemsBinding}      const result = await (async () => {
-        ${transformedCode}
-      })();
-      return n8n.normalizeItems(result);`;
-      const execution = continuesCodeOnRegularOutput(ctx.node) ? `
-      try {${runCode}
-      } catch (error) {
-        return [{ json: { error: error instanceof Error ? error.message : String(error) } }];
-      }` : runCode;
       const operation = `(async () => {
       const currentItems = ${prevVar} || inputItems;
       const $ = (nodeName: string) => ctx.getNode(nodeName);
-${legacyBinding}${inputBinding}${itemsBinding}${execution}
+${legacyBinding}${inputBinding}${itemsBinding}
+${legacyItemsBinding}      const result = await (async () => {
+        ${transformedCode}
+      })();
+      return n8n.normalizeItems(result);
     })()`;
+      const execution = withNodeRetry(ctx.node, operation);
+      const output = continuesCodeOnRegularOutput(ctx.node) ? `${execution}.catch((error: unknown) => [{ json: { error: error instanceof Error ? error.message : String(error) } }])` : execution;
       return `
     // [Node: ${ctx.node.name}] Code Execution
-    ${ctx.variableName} = await ${withNodeRetry(ctx.node, operation)};
+    ${ctx.variableName} = await ${output};
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
     }
