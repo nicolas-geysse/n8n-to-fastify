@@ -425,7 +425,8 @@
     "chainLlm"
   ];
   function usesNodeRetry(node) {
-    return node.retryOnFail === true && (node.type === "n8n-nodes-base.httpRequest" || node.type === "n8n-nodes-base.s3" || llmRetrySuffixes.some((suffix) => node.type.includes(suffix)));
+    const code = node.type === "n8n-nodes-base.code" && node.typeVersion === 2 && (node.parameters?.language ?? "javaScript") === "javaScript" && (node.parameters?.mode ?? "runOnceForAllItems") === "runOnceForAllItems";
+    return node.retryOnFail === true && (code || node.type === "n8n-nodes-base.httpRequest" || node.type === "n8n-nodes-base.s3" || llmRetrySuffixes.some((suffix) => node.type.includes(suffix)));
   }
   function withNodeRetry(node, operation) {
     if (!usesNodeRetry(node))
@@ -1314,13 +1315,14 @@ ${legacyItemsBinding}      const result = await (async () => {
       } catch (error) {
         return [{ json: { error: error instanceof Error ? error.message : String(error) } }];
       }` : runCode;
-      return `
-    // [Node: ${ctx.node.name}] Code Execution
-    ${ctx.variableName} = await (async () => {
+      const operation = `(async () => {
       const currentItems = ${prevVar} || inputItems;
       const $ = (nodeName: string) => ctx.getNode(nodeName);
 ${legacyBinding}${inputBinding}${itemsBinding}${execution}
-    })();
+    })()`;
+      return `
+    // [Node: ${ctx.node.name}] Code Execution
+    ${ctx.variableName} = await ${withNodeRetry(ctx.node, operation)};
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
     }

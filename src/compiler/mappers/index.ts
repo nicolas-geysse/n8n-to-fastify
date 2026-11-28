@@ -226,13 +226,14 @@ ${legacyItemsBinding}      const result = await (async () => {
       }`
       : runCode;
 
-    return `
-    // [Node: ${ctx.node.name}] Code Execution
-    ${ctx.variableName} = await (async () => {
+    const operation = `(async () => {
       const currentItems = ${prevVar} || inputItems;
       const $ = (nodeName: string) => ctx.getNode(nodeName);
 ${legacyBinding}${inputBinding}${itemsBinding}${execution}
-    })();
+    })()`;
+    return `
+    // [Node: ${ctx.node.name}] Code Execution
+    ${ctx.variableName} = await ${withNodeRetry(ctx.node, operation)};
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
   }
