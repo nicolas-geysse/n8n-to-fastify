@@ -19,5 +19,6 @@ export function withNodeRetry(node: N8nNode, operation: string, linkedChain = fa
   const delay = typeof delayNumber === 'number' && Number.isFinite(delayNumber)
     ? Math.min(5000, Math.max(0, Math.trunc(delayNumber)))
     : 1000;
-  return `runWithNodeRetry(() => ${operation}, ${maxTries}, ${delay})`;
+  const retryOn = node.type === 'n8n-nodes-base.code' ? ", 'throw'" : '';
+  return `runWithNodeRetry(() => ${operation}, ${maxTries}, ${delay}${retryOn})`;
 }

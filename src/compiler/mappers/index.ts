@@ -190,27 +190,22 @@ export class NodeMappers {
       };\n` : '';
     const itemsBinding = /\bitems\b/.test(rawCode) ? '      const items = currentItems;\n' : '';
     // Bind the sandbox receiver so direct and detached helper calls both work.
-    const runCode = `
+    // Keep the user's code indentation unchanged, including multiline template literals.
+    const operation = `(async () => {
+      const currentItems = ${prevVar} || inputItems;
+${legacyBinding}${nodeLookupBinding}${inputBinding}${itemsBinding}
 ${legacyItemsBinding}      const result = await (async function (this: { helpers: { httpRequest: typeof codeHttpRequest } }) {
         ${transformedCode}
       }).call({ helpers: { httpRequest: codeHttpRequest } });
-      return n8n.normalizeItems(result);`;
-    // Keep the user's code indentation unchanged, including multiline template literals.
-    const execution = continuesCodeOnRegularOutput(ctx.node)
-      ? `
-      try {${runCode}
-      } catch (error) {
-        return [{ json: { error: error instanceof Error ? error.message : String(error) } }];
-      }`
-      : runCode;
-
-    const operation = `(async () => {
-      const currentItems = ${prevVar} || inputItems;
-${legacyBinding}${nodeLookupBinding}${inputBinding}${itemsBinding}${execution}
+      return n8n.normalizeItems(result);
     })()`;
+    const execution = withNodeRetry(ctx.node, operation);
+    const output = continuesCodeOnRegularOutput(ctx.node)
+      ? `${execution}.catch((error: unknown) => [{ json: { error: error instanceof Error ? error.message : String(error) } }])`
+      : execution;
     return `
     // [Node: ${ctx.node.name}] Code Execution
-    ${ctx.variableName} = await ${withNodeRetry(ctx.node, operation)};
+    ${ctx.variableName} = await ${output};
     item = ${ctx.variableName}[0] || { json: {} };
     ctx.setNodeOutput(${JSON.stringify(ctx.node.name)}, ${ctx.variableName});`;
   }
