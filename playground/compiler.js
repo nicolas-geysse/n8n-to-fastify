@@ -335,7 +335,7 @@
       const schedule = pollingLoops.length ? projectPollingSchedule(nodes, connections, pollingLoops) : { nodes, connections };
       const entryGroups = new Map(pollingLoops.map((loop) => [loop.entry, loop.nodes]));
       const nodeByName = new Map(nodes.map((node) => [node.name, node]));
-      const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections).flatMap((node) => entryGroups.get(node.name)?.map((name2) => nodeByName.get(name2)) ?? [node]);
+      const orderedNodes = this.topologicalSort(schedule.nodes, schedule.connections).flatMap((node) => entryGroups.get(node.name)?.map((name) => nodeByName.get(name)) ?? [node]);
       return {
         id,
         name,
@@ -741,22 +741,30 @@
       throw new Error(`Node ${JSON.stringify(ctx.node.name)}: ${issue}`);
     const params = ctx.node.parameters;
     const portCount = params.numberInputs ?? 2;
-    const sources = Array.from({ length: portCount }, () => []);
-    for (const { sourceNode, outputIndex, inputIndex = 0 } of ctx.node.incomingConnections ?? []) {
-      sources[inputIndex].push(`ctx.getNodeOutput(${JSON.stringify(sourceNode)}, ${outputIndex}) || []`);
-    }
-    const inputs = sources.map((port) => `[${port.join(", ")}].flat()`);
     const options = params.options ?? {};
     const includeUnpaired = ExpressionParser.parse(options.includeUnpaired ?? false);
-    return `
-    {
-      const inputs: N8nItem[][] = [${inputs.join(", ")}];
+    const nodeName = JSON.stringify(ctx.node.name);
+    const merge = `
       const merged = ((item: N8nItem) => mergeByPosition(
         inputs, Boolean(${includeUnpaired}), ${JSON.stringify(options.clashHandling?.values ?? {})},
       ))(inputs[0][0] || { json: {} });
       ${ctx.variableName} = merged;
       item = merged[0] || { json: {} };
-      ctx.setNodeOutputs(${JSON.stringify(ctx.node.name)}, [[0, merged]], merged);
+      ctx.setNodeOutputs(${nodeName}, [[0, merged]], merged);`;
+    if (ctx.positionMergeEdges) {
+      return `
+    await appendBatches.runMerge(${nodeName}, ${JSON.stringify(ctx.positionMergeEdges)}, async (received) => {
+      const inputs = Array.from({ length: ${portCount} }, (_, port) => received[port] ?? []);${merge}
+    });`;
+    }
+    const sources = Array.from({ length: portCount }, () => []);
+    for (const { sourceNode, outputIndex, inputIndex = 0 } of ctx.node.incomingConnections ?? []) {
+      sources[inputIndex].push(`ctx.getNodeOutput(${JSON.stringify(sourceNode)}, ${outputIndex}) || []`);
+    }
+    const inputs = sources.map((port) => `[${port.join(", ")}].flat()`);
+    return `
+    {
+      const inputs: N8nItem[][] = [${inputs.join(", ")}];${merge}
     }`;
   }
 
@@ -1993,8 +2001,8 @@ ${legacyBinding}${inputBinding}${itemsBinding}${execution}
       }
     }
     let hasIncoming = false;
-    for (const outputs2 of Object.values(workflow.connections)) {
-      for (const [type, ports] of Object.entries(outputs2)) {
+    for (const outputs of Object.values(workflow.connections)) {
+      for (const [type, ports] of Object.entries(outputs)) {
         for (const targets of ports) {
           for (const target of targets ?? []) {
             if (target?.node !== node.name)
@@ -2173,7 +2181,7 @@ const DateTime = {
       const loops = wf.pollingLoops ?? [];
       const loopsByMember = new Map(loops.flatMap((loop) => loop.nodes.map((name) => [name, loop])));
       const terminalNames = new Set(loops.flatMap((loop) => loop.terminalExits.map((exit) => exit.target)));
-      const mapNode = (node, previousVariableName) => {
+      const mapNode = (node, previousVariableName, positionMergeEdges) => {
         const varName = nodeVarMap.get(node.name);
         return disabledModes.get(node) === "passthrough" ? `
     ${varName} = ${previousVariableName} || [];
@@ -2183,6 +2191,7 @@ const DateTime = {
           workflowName: wf.name,
           variableName: varName,
           previousVariableName,
+          positionMergeEdges,
           legacyNodePorts: legacyNodes.has(node) ? collectLegacyNodePorts(node, nodesByName) : undefined
         });
       };
@@ -2257,12 +2266,12 @@ ${mapNode(node, prevExpr).trim()}
 ${mapNode(node, prevExpr).trim()}
 });`;
         } else {
-          nodeCode = mapNode(node, prevExpr);
-          if (tracksBatches) {
-            const edges = JSON.stringify(appendPlan.orderedEdges(node));
-            const contributionLimit = isPositionMerge(node) ? `, ${varName}.length` : "";
+          const edges = tracksBatches ? appendPlan.orderedEdges(node) : undefined;
+          const positionMergeEdges = isPositionMerge(node) ? edges : undefined;
+          nodeCode = mapNode(node, prevExpr, positionMergeEdges);
+          if (edges && !positionMergeEdges) {
             nodeCode += `
-appendBatches.recordMergedOutput(${nodeName}, ${edges}${contributionLimit});`;
+appendBatches.recordMergedOutput(${nodeName}, ${JSON.stringify(edges)});`;
           }
         }
         const ancestorTriggers = node.ancestorTriggers ?? [];

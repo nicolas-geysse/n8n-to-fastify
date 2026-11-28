@@ -1,3 +1,4 @@
+import type { BatchEdge } from '../runtime/append-batches';
 import { usesNodeRetry } from './mappers/node-retry';
 import { N8nNode, ParsedWorkflow } from './parser';
 import { postgresTriggerType } from './postgres-trigger';
@@ -156,7 +157,7 @@ const DateTime = {
     const loops = wf.pollingLoops ?? [];
     const loopsByMember = new Map(loops.flatMap(loop => loop.nodes.map(name => [name, loop] as const)));
     const terminalNames = new Set(loops.flatMap(loop => loop.terminalExits.map(exit => exit.target)));
-    const mapNode = (node: N8nNode, previousVariableName: string) => {
+    const mapNode = (node: N8nNode, previousVariableName: string, positionMergeEdges?: BatchEdge[]) => {
       const varName = nodeVarMap.get(node.name)!;
       return disabledModes.get(node) === 'passthrough'
         ? `
@@ -168,6 +169,7 @@ const DateTime = {
             workflowName: wf.name,
             variableName: varName,
             previousVariableName,
+            positionMergeEdges,
             legacyNodePorts: legacyNodes.has(node) ? collectLegacyNodePorts(node, nodesByName) : undefined,
           });
     };
@@ -248,11 +250,11 @@ ${mapNode(node, prevExpr).trim()}
 ${mapNode(node, prevExpr).trim()}
 });`;
       } else {
-        nodeCode = mapNode(node, prevExpr);
-        if (tracksBatches) {
-          const edges = JSON.stringify(appendPlan.orderedEdges(node));
-          const contributionLimit = isPositionMerge(node) ? `, ${varName}.length` : '';
-          nodeCode += `\nappendBatches.recordMergedOutput(${nodeName}, ${edges}${contributionLimit});`;
+        const edges = tracksBatches ? appendPlan.orderedEdges(node) : undefined;
+        const positionMergeEdges = isPositionMerge(node) ? edges : undefined;
+        nodeCode = mapNode(node, prevExpr, positionMergeEdges);
+        if (edges && !positionMergeEdges) {
+          nodeCode += `\nappendBatches.recordMergedOutput(${nodeName}, ${JSON.stringify(edges)});`;
         }
       }
 

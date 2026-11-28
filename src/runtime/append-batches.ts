@@ -6,6 +6,11 @@ interface OrderedBatch {
   order: number[];
 }
 
+interface OrderedInputs {
+  inputs: N8nItem[][];
+  order: number[];
+}
+
 interface Delivery extends OrderedBatch {
   input: number;
   priority: number;
@@ -65,15 +70,10 @@ export class AppendBatches {
       .map(batch => ({ ...batch, input: edge.input, priority: edge.priority })));
   }
 
-  recordMergedOutput(node: string, edges: BatchEdge[], maxItemsPerInput = Infinity): void {
-    // Positional Merge uses at most one item from each input per output item.
-    // Count items in the same order the mapper reads them.
-    const seen = new Map<number, number>();
+  recordMergedOutput(node: string, edges: BatchEdge[]): void {
+    // Single-run Merge mappers carry the last contributing delivery.
     let latest: Delivery | undefined;
     for (const delivery of this.deliveries(edges)) {
-      const count = seen.get(delivery.input) ?? 0;
-      if (count >= maxItemsPerInput) continue;
-      seen.set(delivery.input, count + delivery.items.length);
       if (!latest || compareDelivery(delivery, latest) > 0) latest = delivery;
     }
     const orders = new Map<number, number[][]>();
@@ -85,6 +85,21 @@ export class AppendBatches {
   }
 
   append(edges: BatchEdge[]): OrderedBatch[] {
+    return this.mergeInputs(edges).map(({ inputs, order }) => ({ items: inputs.flat(), order }));
+  }
+
+  async runMerge(
+    node: string,
+    edges: BatchEdge[],
+    execute: (inputs: N8nItem[][]) => Promise<void>,
+  ): Promise<void> {
+    const runs = this.mergeInputs(edges);
+    const batches = runs.map(({ inputs, order }) => ({ items: inputs.flat(), order }));
+    let index = 0;
+    await this.run(node, batches, () => execute(runs[index++].inputs));
+  }
+
+  private mergeInputs(edges: BatchEdge[]): OrderedInputs[] {
     const arrivals = this.deliveries(edges).sort(compareDelivery);
 
     if (!arrivals.length) return [];
@@ -92,7 +107,7 @@ export class AppendBatches {
     const inputCount = edges.reduce((count, edge) => Math.max(count, edge.input + 1), 0);
     const nextRunByInput = Array<number>(inputCount).fill(0);
     const waiting: Array<{ inputs: N8nItem[][]; received: number }> = [];
-    const runs: OrderedBatch[] = [];
+    const runs: OrderedInputs[] = [];
     let outstanding = 0;
     let waitingSince = arrivals[0];
     for (const arrival of arrivals) {
@@ -106,7 +121,7 @@ export class AppendBatches {
       pending.inputs[arrival.input] = arrival.items;
       if (++pending.received === inputCount) {
         outstanding--;
-        runs.push({ items: pending.inputs.flat(), order: [...arrival.order, arrival.priority] });
+        runs.push({ inputs: pending.inputs, order: [...arrival.order, arrival.priority] });
       }
     }
 
@@ -119,7 +134,7 @@ export class AppendBatches {
     waiting.forEach((pending, index) => {
       if (pending.received < inputCount) {
         runs.push({
-          items: pending.inputs.flat(),
+          inputs: pending.inputs,
           order: [phase, ...waitingSince.order, -1, -waitingSince.priority, index],
         });
       }

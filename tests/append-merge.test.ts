@@ -179,6 +179,39 @@ test('Append orders Combine by Position by the completing input from the same di
   }, [['Combined', 'Base'], ['Sibling']]);
 });
 
+test('Append preserves two complete Combine by Position runs around a sibling', async () => {
+  const left = (name: string, y: number, id: string) =>
+    code(name, y, `return [{ json: { id: ${JSON.stringify(id)} } }];`);
+  const right = (name: string, y: number, partner: number) =>
+    code(name, y, `return [{ json: { partner: ${partner} } }];`);
+  await checkWorkflow([
+    source('Start', 0), source('Base', 0),
+    left('Left A', 10, 'A'), right('Right A', 20, 1), source('Sibling', 30),
+    left('Left B', 40, 'B'), right('Right B', 50, 2),
+    {
+      name: 'Combine', type: 'n8n-nodes-base.merge', typeVersion: 3.2, position: [0, 60],
+      parameters: { mode: 'combine', combineBy: 'combineByPosition', options: { includeUnpaired: false } },
+    },
+    code('Relay', 65, `
+      return $input.all().map(({ json }) => ({
+        json: { id: (json.id === "A" && json.partner === 1) || (json.id === "B" && json.partner === 2)
+          ? json.id
+          : "Unexpected" },
+      }));
+    `),
+  ], {
+    Start: output(edge('Base'), edge('Left A'), edge('Right A'), edge('Sibling'), edge('Left B'), edge('Right B')),
+    Base: output(edge('Append', 1)),
+    'Left A': output(edge('Combine')),
+    'Right A': output(edge('Combine', 1)),
+    Sibling: output(edge('Append')),
+    'Left B': output(edge('Combine')),
+    'Right B': output(edge('Combine', 1)),
+    Combine: output(edge('Relay')),
+    Relay: output(edge('Append')),
+  }, [['A', 'Base'], ['Sibling'], ['B']]);
+});
+
 test.each([
   ['a matched pair', true, [['Combined', 'Base'], ['Sibling']]],
   ['a missing partner', false, [['Sibling', 'Base']]],
